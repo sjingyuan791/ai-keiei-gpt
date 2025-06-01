@@ -157,14 +157,25 @@ def select_plan() -> str:
             ],
         )
         return plan
-
 def save_to_gsheet(data: list) -> bool:
     try:
         scope = [
             "https://spreadsheets.google.com/feeds",
             "https://www.googleapis.com/auth/drive",
         ]
-        creds = ServiceAccountCredentials.from_json_keyfile_name("client_secret.json", scope)
+        credentials = {
+            "type": st.secrets["google"]["type"],
+            "project_id": st.secrets["google"]["project_id"],
+            "private_key_id": st.secrets["google"]["private_key_id"],
+            "private_key": st.secrets["google"]["private_key"],
+            "client_email": st.secrets["google"]["client_email"],
+            "client_id": st.secrets["google"]["client_id"],
+            "auth_uri": st.secrets["google"]["auth_uri"],
+            "token_uri": st.secrets["google"]["token_uri"],
+            "auth_provider_x509_cert_url": st.secrets["google"]["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": st.secrets["google"]["client_x509_cert_url"],
+        }
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials, scope)
         client_gs = gspread.authorize(creds)
         sheet = client_gs.open("AI_Dock_Logs").sheet1
         sheet.append_row(data)
