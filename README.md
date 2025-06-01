@@ -6,18 +6,20 @@
 ---
 
 ## 特徴
+
 - 現場ヒアリング/財務データ入力 → ChatGPTが経営診断＆改善提案を自動生成
-- 専門知識不要・数分でPDF/CSV/Excelレポート出力
-- プライバシー・セキュリティも安心（APIキーは各自で管理）
+- 数分でPDF/CSV/Excelレポート出力
+- **OpenAI・Google APIキーは `.streamlit/secrets.toml` に管理 → セキュア**
+- Web版・ローカル版どちらもOK
 
 ---
 
 ## セットアップ手順
 
-1. **リポジトリをClone or ZIPダウンロード**
+1. **リポジトリをClone または ZIPダウンロード**
 
     ```
-    git clone https://github.com/sjingyuan791/ai-keiei-gpt.git
+    git clone https://github.com/xxxx/ai-keiei-gpt.git
     ```
 
 2. **必要なライブラリをインストール**
@@ -27,21 +29,37 @@
     ```
 
 3. **APIキーの設定（必須！）**
-    - `.streamlit/`ディレクトリの中に`secrets.toml`を自分で作成し、以下のように書いてください
+
+    `.streamlit/secrets.toml` に以下の内容を記載してください：
 
     ```
     [openai]
-    OPENAI_API_KEY = "sk-xxxxxxxxxxxxxxxxxxxx"
+    OPENAI_API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+    [google]
+    type = "service_account"
+    project_id = "xxxxxx"
+    private_key_id = "xxxxxx"
+    private_key = """-----BEGIN PRIVATE KEY-----
+    xxxxxxx
+    -----END PRIVATE KEY-----"""
+    client_email = "xxxx@xxxx.iam.gserviceaccount.com"
+    client_id = "xxxxxx"
+    auth_uri = "https://accounts.google.com/o/oauth2/auth"
+    token_uri = "https://oauth2.googleapis.com/token"
+    auth_provider_x509_cert_url = "https://www.googleapis.com/v1/certs"
+    client_x509_cert_url = "xxxx"
     ```
 
-    > ※このファイルは**絶対にGitHubにアップロードしないでください**（.gitignoreですでに保護済み）
+    > ※ `.streamlit/secrets.toml` は **必ず .gitignore でGitHubにアップしないでください**（非公開）
 
-4. **Google連携機能を使う場合**  
-   `client_secret.json.example`を参考に、自分のGoogle APIキー（ServiceAccount）で`client_secret.json`を用意
+4. **client_secret.json は不要です（TOML版に統一済）**
 
 ---
 
 ## 実行方法
+
+ローカルで動かす場合：
 
 streamlit run app.py
 
@@ -55,7 +73,7 @@ yaml
 
 ai-keiei-gpt/
 ├── .streamlit/
-│ └── .gitkeep
+│ └── secrets.toml
 ├── app.py
 ├── requirements.txt
 ├── README.md
@@ -71,10 +89,10 @@ yaml
 ## よくある質問
 
 - **APIキーは公開されませんか？**  
-  → `.gitignore`で保護されています。自分だけが管理できます。
+  → `.gitignore` で保護されています。自分だけが管理できます。
 
 - **PDF日本語が文字化けします**  
-  → `ipag.ttf`（IPAexゴシック）を同じフォルダに置いてください
+  → `ipag.ttf`（IPAexゴシック）を同じフォルダに置いてください。
 
 ---
 
@@ -86,4 +104,4 @@ MIT License
 
 ## お問い合わせ
 
-要望・バグ報告はGitHubのIssueでどうぞ！
+要望・バグ報告は GitHub の Issue へどうぞ！
