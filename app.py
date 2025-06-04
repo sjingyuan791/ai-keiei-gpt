@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================
-# AI経営診断GPT Lite版 v1.4-beta3_fixed 完全版（コピペOK・GitHub品質）
-# バージョン: 2025-06-25_v1.4-beta3_fixed
+# AI経営診断GPT Lite版 v1.5-beta 完全版（コピペOK・GitHub品質）
+# バージョン: 2025-06-30_v1.5-beta
 # ============================================
 
 # --- 1️⃣ インポート ---
@@ -21,7 +21,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # --- 2️⃣ アプリ初期設定（必ず先頭に配置！） ---
-APP_TITLE = "AI経営診断GPT【Lite版 v1.4-beta3_fixed】"
+APP_TITLE = "AI経営診断GPT【Lite版 v1.7-beta】"
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 # --- 3️⃣ CSSスタイル（ChatGPT/Notion風・黒白高級感・中央寄せなど） ---
@@ -185,8 +185,8 @@ def save_to_gsheet(data: list) -> bool:
         "主力商品・サービス",
         "★年間売上高",
         "売上高の増減",
-        "営業利益",
-        "営業利益の増減",
+        "営業利益／所得金額",
+        "営業利益の増減／所得金額の増減",
         "借入金合計",
         "毎月返済額",
         "現金・預金残高",
@@ -246,11 +246,26 @@ def save_to_gsheet(data: list) -> bool:
         return False
 
 # --- 6️⃣ バリデーション関数 ---
-def is_valid_number(val: str, allow_empty: bool = True) -> bool:
+def is_valid_non_negative(val: str, allow_empty: bool = True) -> bool:
+    """
+    非負整数のみ許容。空文字列は allow_empty が True なら True。
+    """
     if val == "" and allow_empty:
         return True
     try:
         return int(val) >= 0
+    except:
+        return False
+
+def is_integer(val: str, allow_empty: bool = True) -> bool:
+    """
+    整数（負数含む）を許容。空文字列は allow_empty が True なら True。
+    """
+    if val == "" and allow_empty:
+        return True
+    try:
+        int(val)
+        return True
     except:
         return False
 
@@ -290,7 +305,7 @@ def show_policy_and_consent() -> bool:
     ・利用状況の把握のため、匿名のアクセスログを取得する場合があります。<br>
     ・利用規約・ポリシーは随時改定される場合があります。改定後の内容は本画面にて掲示します。<br>
     <br>
-    【最終更新日】2025年6月25日<br>
+    【最終更新日】2025年6月05日<br>
     </div>
     """
     st.markdown(policy_html, unsafe_allow_html=True)
@@ -305,7 +320,7 @@ def show_policy_and_consent() -> bool:
 # --- 8️⃣ プラン選択UI ---
 def select_plan() -> str:
     with st.sidebar:
-        st.header("🛠️ プラン選択")
+        st.header("プラン選択")
         st.markdown("""
 | プラン名            | サービス内容                                     | 月額（税込）  |
 |------------------|-----------------------------------------------|--------------|
@@ -343,15 +358,15 @@ def calc_finance_metrics(inp: dict) -> dict:
             return 0
 
     sales    = _to_i(inp.get("年間売上高", "0"))
-    profit   = _to_i(inp.get("営業利益", "0"))
+    profit   = _to_i(inp.get("営業利益／所得金額", "0"))
     cash     = _to_i(inp.get("現金・預金残高", "0"))
     loan     = _to_i(inp.get("借入金合計", "0"))
     repay    = _to_i(inp.get("毎月返済額", "0")) * 12
 
-    # 営業CF は簡易的に営業利益と同義とする
+    # 営業CF は簡易的に営業利益と同義とする（個人の場合も同様に「所得金額」を営業CFとみなす）
     op_cf    = max(profit, 0)
 
-    # 新指標：営業利益率
+    # 新指標：営業利益率（個人の場合は所得利益率として扱う）
     profit_margin = (profit / sales * 100) if sales else None
     # 新指標：キャッシュ残高／月商（何ヶ月分か）
     cash_months = (cash / (sales / 12)) if sales else None
@@ -374,9 +389,14 @@ def calc_finance_metrics(inp: dict) -> dict:
 def render_exec_summary(inp: dict, fin: dict) -> None:
     """
     エグゼクティブサマリーを「左：箇条書き」「右：ボックス形式で数値」表示する関数。
-    新指標（営業利益率・キャッシュ残高/月商・借入金返済負担感）を含める。
+    新指標（営業利益率・キャッシュ残高/月商・返済負担感）を含める。
+    「営業利益／所得金額」は法人／個人で動的切替。
     """
-    # 事前に文字列化しておく
+    # 「法人／個人区分」を判定して、利益表記を動的に設定
+    entity_type = inp.get("法人／個人区分", "")
+    profit_label = "営業利益" if entity_type == "法人" else "所得金額"
+
+    # 数字を文字列化
     sales_str         = f"{fin['sales']:,} 円"
     profit_str        = f"{fin['profit']:,} 円"
     op_cf_str         = f"{fin['op_cf']:,} 円"
@@ -386,16 +406,16 @@ def render_exec_summary(inp: dict, fin: dict) -> None:
 
     # エグゼクティブサマリー全体を section-card で囲む
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown("### 🚀 エグゼクティブサマリー (ワンページ)")
+    st.markdown("###  エグゼクティブサマリー")
 
     # 左：箇条書き、右：HTMLボックス
     col_info, col_boxes = st.columns([2, 3], gap="medium")
 
     with col_info:
         bullets = [
-            f"**法人／個人区分:** {inp.get('法人／個人区分', '不明')}  \n**業種:** {inp.get('業種', '不明')}  \n**地域:** {inp.get('地域', '不明')}",
+            f"**法人／個人区分:** {entity_type}  \n**業種:** {inp.get('業種', '不明')}  \n**地域:** {inp.get('地域', '不明')}",
             f"**主力商品・サービス:** {inp.get('主力商品・サービス', '不明')}",
-            f"**売上トレンド:** {inp.get('売上高の増減', '不明')}  \n**営業利益トレンド:** {inp.get('営業利益の増減', '不明')}",
+            f"**売上トレンド:** {inp.get('売上高の増減', '不明')}  \n**{profit_label}トレンド:** {inp.get('営業利益の増減／所得金額の増減', '不明')}",
             f"**主要顧客数トレンド:** {inp.get('主要顧客数の増減', '不明')}  \n**競合環境:** {inp.get('競合の多さ', '不明')}",
             f"**資金繰り:** {inp.get('資金繰りの状態', '不明')}  \n**借入金合計:** {fin['loan']:,} 円  \n(年返済 {fin['repay']:,} 円)",
             f"**強みキーワード:** {inp.get('自社の強み', '不明')}  \n**課題キーワード:** {inp.get('経営課題選択', '不明')}",
@@ -421,7 +441,7 @@ def render_exec_summary(inp: dict, fin: dict) -> None:
     </div>
   </div>
 
-  <!-- 2. 営業利益 -->
+  <!-- 2. 営業利益／所得金額 -->
   <div style="
       flex: 1 1 45%;
       border: 1px solid #e0e0e0;
@@ -429,13 +449,13 @@ def render_exec_summary(inp: dict, fin: dict) -> None:
       padding: 12px;
       text-align: center;
   ">
-    <div style="font-size: 0.95rem; color: #555555; margin-bottom: 4px;">営業利益</div>
+    <div style="font-size: 0.95rem; color: #555555; margin-bottom: 4px;">{profit_label}</div>
     <div style="font-size: 1.3rem; font-weight: 700; color: #111111;">
       {profit_str}
     </div>
   </div>
 
-  <!-- 3. 営業利益率 -->
+  <!-- 3. 営業利益率／所得利益率 -->
   <div style="
       flex: 1 1 45%;
       border: 1px solid #e0e0e0;
@@ -443,7 +463,7 @@ def render_exec_summary(inp: dict, fin: dict) -> None:
       padding: 12px;
       text-align: center;
   ">
-    <div style="font-size: 0.95rem; color: #555555; margin-bottom: 4px;">営業利益率</div>
+    <div style="font-size: 0.95rem; color: #555555; margin-bottom: 4px;">{profit_label}率</div>
     <div style="font-size: 1.3rem; font-weight: 700; color: #111111;">
       {profit_margin_str}
     </div>
@@ -486,9 +506,9 @@ def render_exec_summary(inp: dict, fin: dict) -> None:
 def render_glossary() -> None:
     with st.expander("📖 用語ミニ辞典"):
         st.markdown("""
-* **営業利益率** – 売上高に対する営業利益の割合。利益性の目安。  
+* **営業利益率／所得利益率** – 売上高に対する営業利益／所得金額の割合。利益性の目安。  
 * **キャッシュ残高/月商** – キャッシュが営業を何ヶ月維持できるかの目安。3ヶ月以上が安心水準。  
-* **返済負担感** – 年間返済額が営業利益の何％か。50％以下が無理ない水準。  
+* **返済負担感** – 年間返済額が営業利益／所得金額の何％か。50％以下が無理ない水準。  
 * **5フォース分析（Five Forces Analysis）** – 競争者・新規参入者・代替品・供給者・顧客の5つの力から業界構造を分析する手法。  
 * **VRIO分析** – 強み(Valuable)、希少性(Rare)、模倣困難性(Inimitable)、組織活用力(Organization)の4観点で戦略案を比較し、最も競争優位につながる案を選定する手法。  
 * **PL/BS/CF** – 損益計算書 / 貸借対照表 / キャッシュフロー計算書。  
@@ -507,14 +527,42 @@ def fetch_pest_competition(user_input: dict) -> str | None:
             "https://www.smrj.go.jp/research_case/research/",
             "https://freelabo.jp/",
         ],
-        "製造業": [
+        "製造業（食品）": [
             "https://www.meti.go.jp/statistics/tyo/kougyo/result-2.html",
             "https://www.jeita.or.jp/japanese/stat/index.htm",
         ],
-        "卸売業": [
-            "https://www.meti.go.jp/statistics/tyo/syoudou/index.html",
+        "製造業（化学）": [
+            "https://www.meti.go.jp/statistics/tyo/kougyo/result-2.html",
+            "https://www.jeita.or.jp/japanese/stat/index.htm",
         ],
-        "小売業": [
+        "製造業（金属）": [
+            "https://www.meti.go.jp/statistics/tyo/kougyo/result-2.html",
+            "https://www.jeita.or.jp/japanese/stat/index.htm",
+        ],
+        "製造業（機械）": [
+            "https://www.meti.go.jp/statistics/tyo/kougyo/result-2.html",
+            "https://www.jeita.or.jp/japanese/stat/index.htm",
+        ],
+        "製造業（その他）": [
+            "https://www.meti.go.jp/statistics/tyo/kougyo/result-2.html",
+            "https://www.jeita.or.jp/japanese/stat/index.htm",
+        ],
+        "建設業（住宅）": [
+            "https://www.mlit.go.jp/statistics/details/t-kensetsu.html",
+            "https://www.e-stat.go.jp/stat-search/files?page=1&layout=datalist&toukei=00600403",
+            "https://www.mlit.go.jp/statistics/details/t-kouji.html",
+        ],
+        "建設業（インフラ・土木）": [
+            "https://www.mlit.go.jp/statistics/details/t-kensetsu.html",
+            "https://www.e-stat.go.jp/stat-search/files?page=1&layout=datalist&toukei=00600403",
+            "https://www.mlit.go.jp/statistics/details/t-kouji.html",
+        ],
+        "建設業（その他）": [
+            "https://www.mlit.go.jp/statistics/details/t-kensetsu.html",
+            "https://www.e-stat.go.jp/stat-search/files?page=1&layout=datalist&toukei=00600403",
+            "https://www.mlit.go.jp/statistics/details/t-kouji.html",
+        ],
+        "小売業（食品）": [
             "https://www.meti.go.jp/statistics/tyo/syoudou/index.html",
             "https://www.stat.go.jp/data/kakei/index.html",
             "https://www.stat.go.jp/data/kouri/index.html",
@@ -523,34 +571,60 @@ def fetch_pest_competition(user_input: dict) -> str | None:
             "https://www.jcsa.gr.jp/",
             "https://www.super.or.jp/data/",
         ],
-        "サービス業": [
+        "小売業（日用品）": [
+            "https://www.meti.go.jp/statistics/tyo/syoudou/index.html",
+            "https://www.stat.go.jp/data/kakei/index.html",
+            "https://www.stat.go.jp/data/kouri/index.html",
+            "https://www.depart.or.jp/",
+            "https://jfa-fc.or.jp/contents/about/statistics/",
+            "https://www.jcsa.gr.jp/",
+            "https://www.super.or.jp/data/",
+        ],
+        "小売業（衣料品）": [
+            "https://www.meti.go.jp/statistics/tyo/syoudou/index.html",
+            "https://www.stat.go.jp/data/kakei/index.html",
+            "https://www.stat.go.jp/data/kouri/index.html",
+            "https://www.depart.or.jp/",
+            "https://jfa-fc.or.jp/contents/about/statistics/",
+            "https://www.jcsa.gr.jp/",
+            "https://www.super.or.jp/data/",
+        ],
+        "小売業（その他）": [
+            "https://www.meti.go.jp/statistics/tyo/syoudou/index.html",
+            "https://www.stat.go.jp/data/kakei/index.html",
+            "https://www.stat.go.jp/data/kouri/index.html",
+            "https://www.depart.or.jp/",
+            "https://jfa-fc.or.jp/contents/about/statistics/",
+            "https://www.jcsa.gr.jp/",
+            "https://www.super.or.jp/data/",
+        ],
+        "サービス業（医療・福祉）": [
             "https://www.stat.go.jp/data/ssds/index.html",
         ],
-        "飲食業": [
+        "サービス業（教育）": [
+            "https://www.stat.go.jp/data/ssds/index.html",
+        ],
+        "サービス業（IT・ソフトウェア）": [
+            "https://www.stat.go.jp/data/ssds/index.html",
+        ],
+        "サービス業（コンサル）": [
+            "https://www.stat.go.jp/data/ssds/index.html",
+        ],
+        "サービス業（その他）": [
+            "https://www.stat.go.jp/data/ssds/index.html",
+        ],
+        "飲食業（飲食店・カフェ）": [
             "https://www.jfnet.or.jp/",
         ],
-        "通信販売": [
-            "https://www.jadma.or.jp/",
+        "飲食業（居酒屋・バー）": [
+            "https://www.jfnet.or.jp/",
         ],
-        "旅館業": [
-            "https://www.mhlw.go.jp/toukei/list/73-1.html",
-            "https://www.mlit.go.jp/kankocho/shisaku/kankochoshinsho.html",
-            "https://www.jalan.net/jalan/doc/news/data/",
+        "飲食業（その他）": [
+            "https://www.jfnet.or.jp/",
         ],
-        "娯楽業": [
-            "https://www.jpc-net.jp/research/",  # 書籍/白書中心 → コメント扱い
-        ],
-        "建設業": [
-            "https://www.mlit.go.jp/statistics/details/t-kensetsu.html",
-            "https://www.e-stat.go.jp/stat-search/files?page=1&layout=datalist&toukei=00600403",
-            "https://www.mlit.go.jp/statistics/details/t-kouji.html",
-        ],
-        "水産業": [
-            "https://www.jfa.maff.go.jp/j/kikaku/wpaper/index.html",
-        ],
-        "食品": [
-            "https://www.stat.go.jp/data/kakei/index.html",
-            "https://www.kokken.or.jp/",  # 書籍あり
+        "地方自治体": [],  # 後で地域から動的に生成
+        "その他（自由入力）": [
+            "https://www.stat.go.jp/data/ssds/index.html",
         ],
     }
 
@@ -640,12 +714,12 @@ def fetch_pest_competition(user_input: dict) -> str | None:
 
     with st.spinner("Web検索＋PEST/競合AI分析中…"):
         try:
-            response = client.responses.create(
-                model="gpt-4o",
-                tools=[{"type": "web_search"}],
-                input=prompt,
-            )
-            return response.output_text
+           response = client.responses.create(
+    model="gpt-4o",
+    input=prompt,
+    tools=[{"type": "web_search"}]
+)
+           return response.output_text
         except Exception as e:
             st.error(f"Responses APIエラー: {e}")
             return None
@@ -672,7 +746,7 @@ def create_pdf(text_sections: list[dict], filename: str = "AI_Dock_Report.pdf") 
         leading=30,
         borderPadding=4,
     )
-    elements.append(Paragraph("経営診断GPTレポート", title_style))
+    elements.append(Paragraph("AI経営診断GPTレポート", title_style))
     elements.append(Spacer(1, 16))
 
     # 目次ページ
@@ -776,18 +850,20 @@ def input_form(plan: str) -> None:
     """
     ステップ1：ユーザーが会社情報・財務情報・ヒアリング情報を入力するフォーム。
     セッション復元対応、主力商品・サービスを追加。
+    「営業利益」→「所得金額」表記を法人／個人で切替。
+    赤字入力を許容。
     """
     st.markdown('<div class="widecard">', unsafe_allow_html=True)
     st.markdown(
         '<div style="font-size:1.6rem; font-weight:700; color:#111111; margin-bottom:8px;">'
-        '✅ AI経営診断GPT【Lite版 v1.4-beta3_fixed】'
+        f'✅ {APP_TITLE}'
         '</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
         '<div class="info-box">'
         '★ 必須項目は「★」マーク。  \n'
-        '★ 数字は半角数字・カンマ不要。  \n'
+        '★ 数字は半角数字のみ（カンマ不要）。  \n'
         '★ 住所は「番地まで書くと外部環境分析の精度が上がります」（任意）。  \n'
         '★ 入力は社長の感覚・主観でOKです。'
         '</div>',
@@ -900,18 +976,21 @@ def input_form(plan: str) -> None:
             )
             st.session_state["field_sale_trend"] = sale_trend
 
+            # 「営業利益／所得金額」は法人／個人で切替
+            profit_label = "営業利益（円）" if entity_type == "法人" else "所得金額（円）"
             profit = st.text_input(
-                "営業利益（円）",
-                value=prev.get("営業利益", ""),
+                f"★{profit_label}",
+                value=prev.get("営業利益／所得金額", ""),
                 placeholder="2000000"
             )
             st.session_state["field_profit"] = profit
 
+            profit_trend_label = "営業利益の増減" if entity_type == "法人" else "所得金額の増減"
             profit_trend = st.selectbox(
-                "営業利益の増減",
+                profit_trend_label,
                 ["増加", "変わらない", "減少"],
-                index=["増加", "変わらない", "減少"].index(prev.get("営業利益の増減", "増加")) if prev.get("営業利益の増減") in ["増加", "変わらない", "減少"] else 0,
-                help="現在の営業利益が前年と比べて増加／変わらない／減少しているかを選択してください"
+                index=["増加", "変わらない", "減少"].index(prev.get("営業利益の増減／所得金額の増減", "増加")) if prev.get("営業利益の増減／所得金額の増減") in ["増加", "変わらない", "減少"] else 0,
+                help="現在の利益が前年と比べて増加／変わらない／減少しているかを選択してください"
             )
             st.session_state["field_profit_trend"] = profit_trend
 
@@ -1042,18 +1121,21 @@ def input_form(plan: str) -> None:
 
         # --- バリデーション ---
         errors = []
-        # 数値型チェック
-        num_fields = [
+        # 非負整数が必要なフィールド
+        non_neg_fields = [
             ("年間売上高", sales),
-            ("営業利益", profit),
             ("借入金合計", loan_total),
             ("毎月返済額", monthly_repayment),
             ("現金・預金残高", cash),
             ("従業員数", employee),
         ]
-        for label, val in num_fields:
-            if val and not is_valid_number(val):
+        for label, val in non_neg_fields:
+            if val and not is_valid_non_negative(val):
                 errors.append(f"「{label}」は0以上の半角数字のみ入力してください。")
+
+        # 利益フィールドは整数（負数含む）許容
+        if profit and not is_integer(profit):
+            errors.append(f"「{profit_label}」は整数で入力してください。")
 
         # 業種：自由入力がある場合はそちらを優先
         industry_value = industry_free if (industry == "その他（自由入力）" and industry_free.strip()) else industry
@@ -1129,8 +1211,8 @@ def input_form(plan: str) -> None:
                 "主な関心テーマ": main_theme,
                 "年間売上高": sales,
                 "売上高の増減": sale_trend,
-                "営業利益": profit,
-                "営業利益の増減": profit_trend,
+                "営業利益／所得金額": profit,
+                "営業利益の増減／所得金額の増減": profit_trend,
                 "現金・預金残高": cash,
                 "借入金合計": loan_total,
                 "毎月返済額": monthly_repayment,
@@ -1236,7 +1318,7 @@ def generate_report(font_path: str) -> None:
     進捗バー＆ログ記録対応。アンケートリンクをレポート最下部に追加。
     """
     st.markdown('<div class="widecard">', unsafe_allow_html=True)
-    st.subheader("📝 経営診断GPTレポート")
+    st.subheader("AI経営診断GPTレポート")
 
     # 財務指標を計算
     fin = calc_finance_metrics(st.session_state.user_input)
@@ -1267,29 +1349,39 @@ def generate_report(font_path: str) -> None:
 
             # レポート作成プロンプト組立
             def make_prompt() -> str:
+                entity_type = user_input.get("法人／個人区分", "不明")
+                profit_label = "営業利益" if entity_type == "法人" else "所得金額"
+                profit_trend_label = "営業利益トレンド" if entity_type == "法人" else "所得金額トレンド"
+
                 return f"""
 あなたは超一流の戦略系経営コンサルタントです。
 以下の順で、現場合意・納得感を重視した診断レポートをA4一枚分で作成してください。
 
-1. 外部環境分析（PEST・5フォース分析・競合分析：前述のWEB調査内容を厚く）
-2. 内部環境分析（現場ヒアリング等の入力を厚く、AI推測絶対厳禁）
-3. 経営サマリー（現状数字・主な課題。ユーザー未入力項目は「不明」記載、AI推測絶対厳禁）
-4. 真因分析（KPI悪化の本当の原因。AI推測厳禁）
-5. 戦略アイディア（必ず4つ。クロスSWOT S×O中心、根拠明示。投資額・効果・回収月数も記載すること）
-6. VRIO分析（4案をV/R/I/Oで比較表＆要約。**必ず '最もスコア高い案: ○○○' を書くこと。PDFでは最終案のみ強調**）
-7. 実行計画（最適案についてKPI・担当・期限・リスク・最初の一歩を5W1Hで）
-8. 次回モニタリング・PDCA設計
-9. 参考データ・URL
+【構成順】
+1. 外部環境分析（PEST・5フォース分析・競合分析。前述のWEB調査内容を厚く、統計・事例を盛り込むこと）
+2. 内部環境分析（現場ヒアリング・ユーザー入力内容を厚く活用し、AI推測は絶対禁止）
+3. 経営サマリー（現状数字・主な課題。ユーザー未入力項目は「不明」「未入力」と明記し、AI推測禁止）
+4. 真因分析（KPI悪化の本当の原因を現場視点で分析。AI推測禁止）
+5. 戦略アイディア（必ず4案。クロスSWOTのS×Oを中心に、根拠を明示する。投資額・効果・回収月数を必ず記載する）
+6. VRIO分析（4案をV/R/I/Oで「数値（1～5点）」で点数化する。**「高・中・低」表現は禁止。点数で統一**。
+   ・必ず「最もスコア高い案: ○○○」を明示する。
+   ・VRIO表の下に評価基準例（例：5点=極めて高い競争優位、1点=低い）も必ず記載する。
+   ・PDF化時は最終案のみ強調表示すること。）
+7. 実行計画（最も優先すべき案について、KPI・担当・期限・リスク・最初の一歩を5W1Hで明確に記載する）
+8. 次回モニタリング・PDCA設計（次回のチェック観点・進め方・指標などを具体的に記載する）
+9. 参考データ・URL（参考としたデータや出典URLを記載する）
 
 【必須条件】
-・数字、現場エピソード、根拠を重視
-・施策や分析は抽象論禁止。ユーザー入力・外部データのみ
-・未入力の数値・比率は「不明」「未入力」等で事実ベース
-・VRIO表や点数化も可能な範囲で盛り込む
-・最終案の「なぜこれか？」「なぜ他案はダメか？」まで必ず論理で
+・「年月・年月日」などの具体的な日付表現は禁止（年次・時期など曖昧な表現にすること。未来のAIモデル整合性維持のため）
+・数字、現場エピソード、根拠を重視すること
+・施策や分析は抽象論を禁止し、ユーザー入力・外部データのみを活用すること
+・未入力の数値・比率は「不明」「未入力」等で事実ベースで記載すること
+・VRIO分析は必ず数値（1～5点）で統一し、評価基準も明示すること
+・最終案は「なぜこれが最適か？」「なぜ他案は劣るのか？」まで必ず論理的に説明すること
+・レポート全体で現場納得感・実行可能性を重視し、現場でそのまま使える内容とすること
 
 【法人／個人区分】:
-{user_input.get("法人／個人区分", "不明")}
+{entity_type}
 
 【地域】:
 {user_input.get("地域", "不明")}
@@ -1302,9 +1394,9 @@ def generate_report(font_path: str) -> None:
 
 【財務指標】:
 - 年間売上高: {fin['sales']:,} 円
-- 営業利益: {fin['profit']:,} 円
+- {profit_label}: {fin['profit']:,} 円
 - 営業CF (簡易): {fin['op_cf']:,} 円
-- 営業利益率: {fin['profit_margin']:.1f}%
+- {profit_label}率: {fin['profit_margin']:.1f}%
 - キャッシュ残高/月商: {fin['cash_months']:.1f} ヶ月分
 - 借入金合計: {fin['loan']:,} 円
 - 年間返済額: {fin['repay']:,} 円
@@ -1346,9 +1438,31 @@ def generate_report(font_path: str) -> None:
                 # ダブルチェック＆修正プロンプト
                 double_prompt = f"""
 あなたはプロの経営コンサルタントです。
-以下のレポート初稿を厳しくダブルチェックし、
-不足箇所・根拠不足・抽象論・未入力数値のAI推測はすべて排除し加筆修正してください。
-必ず構成順・数字／現場／論理根拠・合意形成を重視。
+以下のレポート初稿を厳しくダブルチェックし、不足箇所・根拠不足・抽象論・未入力数値のAI推測はすべて排除し加筆修正してください。
+
+【特に重点的にチェックする事項】
+・内部環境分析、真因分析は厳密にユーザー入力内容・現場ヒアリング内容に基づき、AIの推測・補完は禁止
+・VRIO分析は必ず「数値（1～5点）」で統一されているか確認すること
+・VRIO表に「高・中・低」表現が残っていた場合は必ず数値（1～5点）に修正すること
+・VRIO表下に評価基準（例：5点＝極めて高い競争優位）を必ず記載すること
+・「最もスコア高い案: ○○○」が必ず明示されているか確認すること
+・実行計画は「なぜこの案が最適なのか？」「なぜ他案は劣るのか？」の論理的説明が十分であること
+・構成順（1～9章）が正しく揃っているか確認すること
+・各章に抜け漏れがないこと
+・出典・参考URLが記載されていること
+
+【禁止事項】
+・レポート内に「202X年」「20XX年」「〇年〇月」「〇月」などの **具体的な年月表現は禁止**  
+  → 含まれていた場合は「今後数か月以内」「半年以内」「今期中」「今後」などの表現に修正すること  
+・AIが古い年や未来の矛盾した年を勝手に補完しないこと
+
+【全体方針】
+・構成順・数字／現場エピソード／論理根拠／合意形成を重視すること
+・施策や分析は抽象論禁止。ユーザー入力・外部データに基づいて事実ベースで記載すること
+・未入力項目は「不明」「未入力」等の表記とすること（AI補完禁止）
+・現場で納得感が高く、そのまま実行に使える品質まで整えて仕上げること
+
+
 【レポート初稿】
 {first_report}
 """
@@ -1472,7 +1586,7 @@ def generate_report(font_path: str) -> None:
         st.markdown("---\n### 📣 アンケートのお願い")
         st.markdown("""
 大変お手数ですが、本アプリの改善のためにご協力ください。  
-👉 [ご利用後アンケート（Googleフォーム）はこちら](https://docs.google.com/forms/d/e/1FAIpQLSeOwzqGwktHwJNgh9vBCUT8cGfFEHuAd8zwQ04k1uxDNgcKQA/viewform?usp=sf_link)  
+ [ご利用後アンケート（Googleフォーム）はこちら](https://docs.google.com/forms/d/e/1FAIpQLSeOwzqGwktHwJNgh9vBCUT8cGfFEHuAd8zwQ04k1uxDNgcKQA/viewform?usp=sf_link)  
 """, unsafe_allow_html=True)
 
     # --- 戻るボタンは Tabs の後ろに置く ---
@@ -1488,7 +1602,10 @@ def generate_report(font_path: str) -> None:
 
 # --- 2️⃣0️⃣ メイン実行部 ---
 def main() -> None:
+    # PDF用フォント確認
     font_path = check_font()
+
+    # セッションのstep初期化
     if "step" not in st.session_state:
         st.session_state.step = 1
 
@@ -1498,10 +1615,13 @@ def main() -> None:
         st.warning("ご利用には同意が必要です。")
         return
 
+    # --- 活用イメージ表示 ---
+    render_usage_scenarios()
+
     # --- プラン選択 ---
     plan = select_plan()
 
-    # Starter/Pro は準備中案内で止める
+    # Starter/Proは準備中案内
     if plan.startswith("Starter"):
         st.info("「Starter（右腕・API連携）」プランは現在準備中です。しばらくお待ちください。")
         return
@@ -1520,6 +1640,23 @@ def main() -> None:
         generate_report(font_path)
     else:
         st.error("AIレポートの生成に失敗しました。入力内容やプロンプトを見直し、再度お試しください。")
+
+
+# --- 活用イメージ表示（ChatGPT/Notion風シンプルカード） ---
+def render_usage_scenarios() -> None:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown("### ✨ このAI診断の活用イメージ")
+    st.markdown("""
+- 📌 **忙しい中でも経営の現状と課題を整理したい**
+- 📌 **売上が停滞していて打ち手を考えたい**
+- 📌 **資金繰りが厳しくなり対策を整理したい**
+- 📌 **社員や家族との意識合わせに活用したい**
+- 📌 **自分の考えを見える化したい**
+- 📌 **金融機関との面談に備えて課題や今後の方針を整理したい**
+- 📌 **補助金用事業計画書の構成をまとめたい**
+    """)
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 # --- 2️⃣1️⃣ エントリーポイント ---
 if __name__ == "__main__":
