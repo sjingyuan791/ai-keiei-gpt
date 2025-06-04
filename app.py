@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================
-# AI経営診断GPT Lite版 v1.4-beta2_fixed 完全版（コピペOK・GitHub品質）
-# バージョン: 2025-06-20_v1.4-beta2_fixed
+# AI経営診断GPT Lite版 v1.4-beta3_fixed 完全版（コピペOK・GitHub品質）
+# バージョン: 2025-06-25_v1.4-beta3_fixed
 # ============================================
 
 # --- 1️⃣ インポート ---
@@ -21,7 +21,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # --- 2️⃣ アプリ初期設定（必ず先頭に配置！） ---
-APP_TITLE = "AI経営診断GPT【Lite版 v1.4-beta2_fixed】"
+APP_TITLE = "AI経営診断GPT【Lite版 v1.4-beta3_fixed】"
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 # --- 3️⃣ CSSスタイル（ChatGPT/Notion風・黒白高級感・中央寄せなど） ---
@@ -172,7 +172,11 @@ def save_to_gsheet(data: list) -> bool:
     """
     Googleスプレッドシートにデータを保存する（デバッグ強化版）。
     既存ヘッダーと照合し、異なる場合はクリアしてヘッダー再作成。
+    ※ ユーザー向け画面には表示しない「任意保存」機能として残す
     """
+    if not st.secrets.get("google", {}).get("enable_save", False):
+        return False
+
     headers = [
         "法人／個人区分",
         "会社名（マスク済）",
@@ -222,46 +226,23 @@ def save_to_gsheet(data: list) -> bool:
         creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials, scope)
         client_gs = gspread.authorize(creds)
 
-        # 新しいスプレッドシートIDに固定
         sheet_id = st.secrets["google"]["sheet_id"]
-        st.info(f"[DEBUG] sheet_id: {sheet_id}")
-
-        # シート取得
         sheet = client_gs.open_by_key(sheet_id).sheet1
 
-        # 全データ確認
         all_vals = sheet.get_all_values()
-        st.info(f"[DEBUG] 取得した全行: (行数: {len(all_vals)})")
-
-        # ヘッダーが必要か判定
         if not all_vals or all_vals == [['']] or len(all_vals) == 0:
-            st.info("✅ [DEBUG] シートが空です → ヘッダー行を書き込みます。")
             sheet.append_row(headers)
-            st.info("✅ ヘッダーを書き込みました。")
         else:
             first_row = all_vals[0]
             if first_row != headers:
-                st.info("⚠️ [DEBUG] 既存ヘッダーが期待と異なります → 既存シートをクリアしてヘッダーを再作成します。")
                 sheet.clear()
                 sheet.append_row(headers)
-                st.info("✅ ヘッダーを再作成しました。")
 
-        # データ整形
         safe_data = [str(item) if not isinstance(item, str) else item for item in data]
-        st.info(f"[DEBUG] 保存するデータ行: (列数: {len(safe_data)})")
-
-        # append_row 実行
-        try:
-            sheet.append_row(safe_data)
-            st.success("✅ Googleスプレッドシートにデータを保存しました！（append_row 成功）")
-        except Exception as e:
-            st.error(f"[ERROR] append_row() に失敗: {type(e).__name__} - {e}")
-            return False
-
+        sheet.append_row(safe_data)
         return True
 
-    except Exception as e:
-        st.error(f"[ERROR] Googleスプレッドシート保存エラー: {type(e).__name__} - {e}")
+    except:
         return False
 
 # --- 6️⃣ バリデーション関数 ---
@@ -306,16 +287,15 @@ def show_policy_and_consent() -> bool:
     ・予告なくサービス内容が変更・中断・終了する場合があります。<br>
     <br>
     <b>【その他】</b><br>
-    ・Googleスプレッドシート等に保存される際の通信は暗号化されます。<br>
     ・利用状況の把握のため、匿名のアクセスログを取得する場合があります。<br>
-    ・利用規約・ポリシーは適宜改定される場合があります。改定後の内容は本画面にて掲示します。<br>
+    ・利用規約・ポリシーは随時改定される場合があります。改定後の内容は本画面にて掲示します。<br>
     <br>
-    【最終更新日】2025年6月3日<br>
+    【最終更新日】2025年6月25日<br>
     </div>
     """
     st.markdown(policy_html, unsafe_allow_html=True)
 
-    # チェックボックスを中央寄せするため、wrapする <div class="consent-box"> を使う
+    # チェックボックスを中央寄せするため、wrap する
     st.markdown('<div class="consent-box">', unsafe_allow_html=True)
     checked = st.checkbox("上記の内容に同意します", key="consent_checkbox", label_visibility="visible")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -516,12 +496,140 @@ def render_glossary() -> None:
 
 # --- 1️⃣3️⃣ 外部環境（PEST＋競合）取得 ---
 def fetch_pest_competition(user_input: dict) -> str | None:
+    """
+    外部環境分析用プロンプトを生成し、Responses API で Web検索を実行。  
+    優先サイトマスターを事前に加えて検索精度向上を図る。
+    """
+    # 優先サイトリスト（業種別に拡張可能、地方自治体は動的生成）
+    static_sites = {
+        "全産業": [
+            "https://www.boj.or.jp/research/brp/rer/index.htm",
+            "https://www.smrj.go.jp/research_case/research/",
+            "https://freelabo.jp/",
+        ],
+        "製造業": [
+            "https://www.meti.go.jp/statistics/tyo/kougyo/result-2.html",
+            "https://www.jeita.or.jp/japanese/stat/index.htm",
+        ],
+        "卸売業": [
+            "https://www.meti.go.jp/statistics/tyo/syoudou/index.html",
+        ],
+        "小売業": [
+            "https://www.meti.go.jp/statistics/tyo/syoudou/index.html",
+            "https://www.stat.go.jp/data/kakei/index.html",
+            "https://www.stat.go.jp/data/kouri/index.html",
+            "https://www.depart.or.jp/",
+            "https://jfa-fc.or.jp/contents/about/statistics/",
+            "https://www.jcsa.gr.jp/",
+            "https://www.super.or.jp/data/",
+        ],
+        "サービス業": [
+            "https://www.stat.go.jp/data/ssds/index.html",
+        ],
+        "飲食業": [
+            "https://www.jfnet.or.jp/",
+        ],
+        "通信販売": [
+            "https://www.jadma.or.jp/",
+        ],
+        "旅館業": [
+            "https://www.mhlw.go.jp/toukei/list/73-1.html",
+            "https://www.mlit.go.jp/kankocho/shisaku/kankochoshinsho.html",
+            "https://www.jalan.net/jalan/doc/news/data/",
+        ],
+        "娯楽業": [
+            "https://www.jpc-net.jp/research/",  # 書籍/白書中心 → コメント扱い
+        ],
+        "建設業": [
+            "https://www.mlit.go.jp/statistics/details/t-kensetsu.html",
+            "https://www.e-stat.go.jp/stat-search/files?page=1&layout=datalist&toukei=00600403",
+            "https://www.mlit.go.jp/statistics/details/t-kouji.html",
+        ],
+        "水産業": [
+            "https://www.jfa.maff.go.jp/j/kikaku/wpaper/index.html",
+        ],
+        "食品": [
+            "https://www.stat.go.jp/data/kakei/index.html",
+            "https://www.kokken.or.jp/",  # 書籍あり
+        ],
+    }
+
+    industry = user_input.get("業種", "")
+    sites_to_include = []
+
+    # 地方自治体の場合、地域から県名を抽出してURLを生成
+    if industry == "地方自治体":
+        region = user_input.get("地域", "")
+        # 地域文字列から「○○県」を抽出
+        match = re.match(r".*?([^\s]+?県)", region)
+        if match:
+            prefecture_name = match.group(1)
+            prefecture_slug_map = {
+                "北海道": "hokkaido",
+                "青森県": "aomori",
+                "岩手県": "iwate",
+                "宮城県": "miyagi",
+                "秋田県": "akita",
+                "山形県": "yamagata",
+                "福島県": "fukushima",
+                "茨城県": "ibaraki",
+                "栃木県": "tochigi",
+                "群馬県": "gunma",
+                "埼玉県": "saitama",
+                "千葉県": "chiba",
+                "東京都": "tokyo",
+                "神奈川県": "kanagawa",
+                "新潟県": "niigata",
+                "富山県": "toyama",
+                "石川県": "ishikawa",
+                "福井県": "fukui",
+                "山梨県": "yamanashi",
+                "長野県": "nagano",
+                "岐阜県": "gifu",
+                "静岡県": "shizuoka",
+                "愛知県": "aichi",
+                "三重県": "mie",
+                "滋賀県": "shiga",
+                "京都府": "kyoto",
+                "大阪府": "osaka",
+                "兵庫県": "hyogo",
+                "奈良県": "nara",
+                "和歌山県": "wakayama",
+                "鳥取県": "tottori",
+                "島根県": "shimane",
+                "岡山県": "okayama",
+                "広島県": "hiroshima",
+                "山口県": "yamaguchi",
+                "徳島県": "tokushima",
+                "香川県": "kagawa",
+                "愛媛県": "ehime",
+                "高知県": "kochi",
+                "福岡県": "fukuoka",
+                "佐賀県": "saga",
+                "長崎県": "nagasaki",
+                "熊本県": "kumamoto",
+                "大分県": "oita",
+                "宮崎県": "miyazaki",
+                "鹿児島県": "kagoshima",
+                "沖縄県": "okinawa",
+            }
+            slug = prefecture_slug_map.get(prefecture_name, None)
+            if slug:
+                sites_to_include = [f"https://www.pref.{slug}.lg.jp/"]
+    else:
+        sites_to_include = static_sites.get(industry, [])
+
+    sites_text = ""
+    if sites_to_include:
+        sites_text = "（参照優先サイト: " + ", ".join(sites_to_include) + "）\n\n"
+
     query = (
-        f"{user_input.get('地域', '')} {user_input.get('業種', '')} {user_input.get('主力商品・サービス', '')} "
+        f"{user_input.get('地域', '')} {industry} {user_input.get('主力商品・サービス', '')} "
         f"業界 {user_input.get('主な関心テーマ', user_input.get('経営課題選択', 'トレンド'))} 最新動向 PEST 競合"
     )
     prompt = (
-        "あなたはトップクラスの経営コンサルタントです。\n"
+        f"あなたはトップクラスの経営コンサルタントです。\n"
+        f"{sites_text}"
         "外部環境分析（PEST＋5フォース分析＋競合分析）をA4 1～2枚分・専門家レポート並みに詳しく、日本語で出力。\n"
         "■現時点の最新Web情報を参照し、各PEST項目ごとに実例・統計・法改正・消費者動向・AI/デジタル事例まで厚く\n"
         "■5フォース分析で業界構造を分析、主要競合5社以上の特徴・最新ニュース・ベンチマーク事例を具体的に\n"
@@ -545,7 +653,7 @@ def fetch_pest_competition(user_input: dict) -> str | None:
 # --- 1️⃣4️⃣ PDF生成（目次自動生成付き） ---
 def create_pdf(text_sections: list[dict], filename: str = "AI_Dock_Report.pdf") -> io.BytesIO:
     """
-    PDFを生成します。目次ページを自動挿入。
+    PDFを生成します。目次ページを自動挿入。VRIO分析セクションは「最終案のみ」を反映。
     """
     buffer = io.BytesIO()
     pdfmetrics.registerFont(TTFont("IPAexGothic", "ipag.ttf"))
@@ -587,7 +695,6 @@ def create_pdf(text_sections: list[dict], filename: str = "AI_Dock_Report.pdf") 
     elements.append(Paragraph("目次", toc_style_title))
     for idx, sec in enumerate(text_sections, start=1):
         title = sec.get("title", "")
-        # ページ番号は後付けのため空欄にしておく
         elements.append(Paragraph(f"{idx}. {title} ......", toc_style_item))
     elements.append(Spacer(1, 20))
 
@@ -673,7 +780,7 @@ def input_form(plan: str) -> None:
     st.markdown('<div class="widecard">', unsafe_allow_html=True)
     st.markdown(
         '<div style="font-size:1.6rem; font-weight:700; color:#111111; margin-bottom:8px;">'
-        '✅ AI経営診断GPT【Lite版 v1.4-beta2_fixed】'
+        '✅ AI経営診断GPT【Lite版 v1.4-beta3_fixed】'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -687,7 +794,7 @@ def input_form(plan: str) -> None:
         unsafe_allow_html=True,
     )
 
-    # セッション完全リセットボタン（古いキーをすべてクリア）
+    # セッション完全リセットボタン（すべてクリア）
     if st.button("セッション完全リセット（全初期化）"):
         st.session_state.clear()
         st.experimental_rerun()
@@ -738,6 +845,7 @@ def input_form(plan: str) -> None:
                 "小売業（食品）", "小売業（日用品）", "小売業（衣料品）", "小売業（その他）",
                 "サービス業（医療・福祉）", "サービス業（教育）", "サービス業（IT・ソフトウェア）", "サービス業（コンサル）", "サービス業（その他）",
                 "飲食業（飲食店・カフェ）", "飲食業（居酒屋・バー）", "飲食業（その他）",
+                "地方自治体",
                 "その他（自由入力）"
             ]
             selected_industry = prev.get("業種", "製造業（食品）")
@@ -947,8 +1055,8 @@ def input_form(plan: str) -> None:
             if val and not is_valid_number(val):
                 errors.append(f"「{label}」は0以上の半角数字のみ入力してください。")
 
-        # 業種
-        industry_value = industry_free if industry == "その他（自由入力）" else industry
+        # 業種：自由入力がある場合はそちらを優先
+        industry_value = industry_free if (industry == "その他（自由入力）" and industry_free.strip()) else industry
 
         # 必須項目チェック
         for key, val in [
@@ -1009,6 +1117,7 @@ def input_form(plan: str) -> None:
                 str(legal_flag),
                 main_theme,
             ]
+            # 任意化されたスプレッド保存を実行（画面には何も表示しない）
             save_to_gsheet(save_row)
 
             st.session_state.user_input = {
@@ -1124,7 +1233,7 @@ def ai_deep_question() -> None:
 def generate_report(font_path: str) -> None:
     """
     ステップ3：AIを使って最終診断レポートを生成し、PDF/CSV/Excel出力をまとめる。
-    進捗バー＆ログ記録対応。
+    進捗バー＆ログ記録対応。アンケートリンクをレポート最下部に追加。
     """
     st.markdown('<div class="widecard">', unsafe_allow_html=True)
     st.subheader("📝 経営診断GPTレポート")
@@ -1151,7 +1260,7 @@ def generate_report(font_path: str) -> None:
             ai_question = st.session_state.ai_question
             user_answer = st.session_state.user_answer
 
-            # 外部環境（PEST＋競合）をAI＋Web検索で取得
+            # 外部環境データをAI＋Web検索で取得
             with st.spinner("外部環境データ取得中…"):
                 external_env_text = fetch_pest_competition(user_input) or "（外部環境分析取得エラー）"
             progress.progress(20)
@@ -1163,7 +1272,7 @@ def generate_report(font_path: str) -> None:
 以下の順で、現場合意・納得感を重視した診断レポートをA4一枚分で作成してください。
 
 1. 外部環境分析（PEST・5フォース分析・競合分析：前述のWEB調査内容を厚く）
-2. 内部環境分析（現場ヒアリング等の入力を厚く、AI推測厳禁）
+2. 内部環境分析（現場ヒアリング等の入力を厚く、AI推測絶対厳禁）
 3. 経営サマリー（現状数字・主な課題。ユーザー未入力項目は「不明」記載、AI推測絶対厳禁）
 4. 真因分析（KPI悪化の本当の原因。AI推測厳禁）
 5. 戦略アイディア（必ず4つ。クロスSWOT S×O中心、根拠明示。投資額・効果・回収月数も記載すること）
@@ -1296,10 +1405,9 @@ def generate_report(font_path: str) -> None:
                                     highest_line = ln.strip()
                                     break
                             if highest_line:
-                                section_text = f"**VRIO分析（最終案）**\n\n- {highest_line}\n\n\n" + "\n".join(lines)
+                                section_text = f"**VRIO分析（最終案）**\n\n- {highest_line}\n\n\n"
                             else:
-                                section_text = "**VRIO分析（全文）**\n\n" + "\n".join(lines)
-
+                                section_text = "**VRIO分析（最終案のみ表示）**\n\n"
                         text_sections.append({
                             "title": title,
                             "text": section_text,
@@ -1324,7 +1432,7 @@ def generate_report(font_path: str) -> None:
             st.session_state.keep_report = False
             st.rerun()
 
-        # --- PDF生成・ダウンロード用バッファを保持 ---
+        # --- PDF生成・ダウンロード用バッファ保持 ---
         if st.session_state.get("pdf_buffer") is None:
             buffer = create_pdf(st.session_state["text_sections"], filename="AI_Dock_Report.pdf")
             st.session_state["pdf_buffer"] = buffer
@@ -1360,7 +1468,14 @@ def generate_report(font_path: str) -> None:
             else:
                 st.caption("（Excel出力には xlsxwriter パッケージが必要です）")
 
-    # --- ★ 戻るボタンは Tabs の後ろに置く ★ ---
+        # --- アンケートリンク表示 ---
+        st.markdown("---\n### 📣 アンケートのお願い")
+        st.markdown("""
+大変お手数ですが、本アプリの改善のためにご協力ください。  
+👉 [ご利用後アンケート（Googleフォーム）はこちら](https://docs.google.com/forms/d/e/1FAIpQLSeOwzqGwktHwJNgh9vBCUT8cGfFEHuAd8zwQ04k1uxDNgcKQA/viewform?usp=sf_link)  
+""", unsafe_allow_html=True)
+
+    # --- 戻るボタンは Tabs の後ろに置く ---
     st.markdown('<div class="center-button">', unsafe_allow_html=True)
     back_col1, back_col2, back_col3 = st.columns([1, 1, 1])
     with back_col2:
