@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================
-# AI経営診断GPT Lite版 v1.5-beta 完全版（コピペOK・GitHub品質）
-# バージョン: 2025-06-30_v1.5-beta
+# AI経営診断GPT【Lite版 v1.9.1 β版】 完全版（コピペOK・GitHub品質）
+# バージョン: 2025-07-15_v1.9.1（β版・Googleスプレッド保存無効版）
 # ============================================
 
 # --- 1️⃣ インポート ---
@@ -11,18 +11,20 @@ import io
 import re
 import pandas as pd
 from openai import OpenAI
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase import pdfmetrics
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, ListFlowable, ListItem
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # --- 2️⃣ アプリ初期設定（必ず先頭に配置！） ---
-APP_TITLE = "AI経営診断GPT【Lite版 v1.7-beta】"
+APP_TITLE = "AI経営診断GPT【Lite版 v1.9.1 β版】"
 st.set_page_config(page_title=APP_TITLE, layout="wide")
+
+# --- 2️⃣a デバッグモード設定 ---
+# 本番モードにするには False に変更してください
+debug = False
 
 # --- 3️⃣ CSSスタイル（ChatGPT/Notion風・黒白高級感・中央寄せなど） ---
 st.markdown("""
@@ -108,18 +110,24 @@ input:focus:invalid, textarea:focus:invalid,
     background: #ffffff !important;
     border-right: 1px solid #e0e0e0;
 }
-/* ボタン */
-.stButton > button {
+/* ボタン（最新Streamlit対応版） */
+[data-testid="baseButton-secondary"], 
+[data-testid="baseButton-primary"] {
     font-size: 1.1em !important;
     font-family: 'Inter', 'Noto Sans JP', sans-serif !important;
     padding: 0.75em 2em !important;
     border-radius: 8px !important;
     background: #000000 !important;
     color: #ffffff !important;
-    font-weight: 600;
-    border: none;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-    transition: all 0.1s ease-in-out;
+    font-weight: 600 !important;
+    border: none !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1) !important;
+    transition: all 0.1s ease-in-out !important;
+}
+[data-testid="baseButton-secondary"]:hover, 
+[data-testid="baseButton-primary"]:hover {
+    background: #333333 !important;
+    transform: translateY(-1px);
 }
 .stButton > button:hover {
     background: #333333 !important;
@@ -136,10 +144,37 @@ label, .stTextInput label, .stSelectbox label {
     font-size: 1.02em;
     color: #222222;
 }
+/* ボタンバー */
+.button-bar {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    margin: 16px 0;
+}
 /* 戻るボタン中央寄せ */
 .center-button {
     text-align: center;
     margin: 12px 0;
+}
+/* --- チェックボックスをネイティブ風に整える --- */
+[data-testid="stCheckbox"] {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    margin-bottom: 16px;
+    font-size: 1.05em;
+    font-weight: 600;
+    color: #222222;
+}
+[data-testid="stCheckbox"] input[type="checkbox"] {
+    transform: scale(1.4);
+    accent-color: #000000;
+    cursor: pointer;
+}
+[data-testid="stCheckbox"] > div {
+    display: flex;
+    align-items: center;
 }
 /* ダークモード対応 */
 [data-testid="stAppViewContainer"][class*="dark"] .widecard {
@@ -167,84 +202,6 @@ label, .stTextInput label, .stSelectbox label {
 api_key = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
 client = OpenAI(api_key=api_key) if api_key else None
 
-# --- 5️⃣ Googleスプレッド保存関数（デバッグ強化版＆ヘッダー検証） ---
-def save_to_gsheet(data: list) -> bool:
-    """
-    Googleスプレッドシートにデータを保存する（デバッグ強化版）。
-    既存ヘッダーと照合し、異なる場合はクリアしてヘッダー再作成。
-    ※ ユーザー向け画面には表示しない「任意保存」機能として残す
-    """
-    if not st.secrets.get("google", {}).get("enable_save", False):
-        return False
-
-    headers = [
-        "法人／個人区分",
-        "会社名（マスク済）",
-        "地域",
-        "業種",
-        "主力商品・サービス",
-        "★年間売上高",
-        "売上高の増減",
-        "営業利益／所得金額",
-        "営業利益の増減／所得金額の増減",
-        "借入金合計",
-        "毎月返済額",
-        "現金・預金残高",
-        "従業員数",
-        "主な顧客層",
-        "主要顧客数の増減",
-        "主な販売チャネル",
-        "競合の多さ",
-        "経営課題選択",
-        "経営課題自由記述",
-        "自社の強み",
-        "資金繰りの状態",
-        "現場ヒアリング所見",
-        "外部環境肌感",
-        "プラン",
-        "法務税務フラグ",
-        "主な関心テーマ",
-    ]
-
-    try:
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        credentials = {
-            "type": st.secrets["google"]["type"],
-            "project_id": st.secrets["google"]["project_id"],
-            "private_key_id": st.secrets["google"]["private_key_id"],
-            "private_key": st.secrets["google"]["private_key"].replace("\\n", "\n"),
-            "client_email": st.secrets["google"]["client_email"],
-            "client_id": st.secrets["google"]["client_id"],
-            "auth_uri": st.secrets["google"]["auth_uri"],
-            "token_uri": st.secrets["google"]["token_uri"],
-            "auth_provider_x509_cert_url": st.secrets["google"]["auth_provider_x509_cert_url"],
-            "client_x509_cert_url": st.secrets["google"]["client_x509_cert_url"],
-        }
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials, scope)
-        client_gs = gspread.authorize(creds)
-
-        sheet_id = st.secrets["google"]["sheet_id"]
-        sheet = client_gs.open_by_key(sheet_id).sheet1
-
-        all_vals = sheet.get_all_values()
-        if not all_vals or all_vals == [['']] or len(all_vals) == 0:
-            sheet.append_row(headers)
-        else:
-            first_row = all_vals[0]
-            if first_row != headers:
-                sheet.clear()
-                sheet.append_row(headers)
-
-        safe_data = [str(item) if not isinstance(item, str) else item for item in data]
-        sheet.append_row(safe_data)
-        return True
-
-    except:
-        return False
-
 # --- 6️⃣ バリデーション関数 ---
 def is_valid_non_negative(val: str, allow_empty: bool = True) -> bool:
     """
@@ -259,7 +216,7 @@ def is_valid_non_negative(val: str, allow_empty: bool = True) -> bool:
 
 def is_integer(val: str, allow_empty: bool = True) -> bool:
     """
-    整数（負数含む）を許容。空文字列は allow_empty が True なら True。
+    整数（負数含む）を許容。空文字列は allow_empty が True を True。
     """
     if val == "" and allow_empty:
         return True
@@ -269,9 +226,12 @@ def is_integer(val: str, allow_empty: bool = True) -> bool:
     except:
         return False
 
-# --- 7️⃣ ポリシー同意チェック（スクロールボックス版） ---
-def show_policy_and_consent() -> bool:
-    # タイトルを中央寄せ
+# --- 7️⃣ ポリシー同意チェック（ステップ0化＋次へボタン） ---
+def show_policy_step() -> None:
+    """
+    ステップ0：利用規約・ポリシー同意画面を表示し、
+    同意したらステップ1に進むボタンを提示する。
+    """
     st.markdown(f'<div class="page-title">{APP_TITLE}</div>', unsafe_allow_html=True)
 
     policy_html = """
@@ -288,21 +248,20 @@ def show_policy_and_consent() -> bool:
         margin-bottom: 12px;
     ">
     <b>【個人情報の取扱い・プライバシーポリシー】</b><br>
-    ・入力内容はサービス改善・統計分析の目的で匿名化し保存します。<br>
-    ・個人情報・内容は法令・ガイドラインに基づき適切に管理されます。<br>
-    ・AIの学習用途（OpenAI等への品質向上・二次利用）には使用されません。<br>
+    ・ご入力いただいた内容は、本サービスの動作にのみ一時的に利用され、サーバー等に保存されません。<br>
+    ・AIの学習用途（OpenAI等の品質向上・二次利用）には使用されません。<br>
+    ・PDFファイルはお客様ご自身の端末にてダウンロード・管理していただきます。<br>
     ・第三者への提供は行いません。<br>
-    ・保存されたデータは必要期間終了後、速やかに削除します。<br>
-    ・修正・削除の希望があればご連絡ください。<br>
+    ・利用に伴う入力データは、PDF生成後に当サービス上からは自動的に消去されます。<br>
     <br>
     <b>【利用規約・免責事項】</b><br>
-    ・AI出力内容の正確性・完全性は保証できません。利用者自身の責任で活用してください。<br>
+    ・AI出力内容の正確性・完全性は保証できません。利用者ご自身の判断と責任にてご活用ください。<br>
     ・本サービスは医療・法務・財務の専門アドバイスを代替するものではありません。<br>
     ・本サービスの利用により発生した直接・間接的な損害について、提供者は責任を負いません。<br>
     ・予告なくサービス内容が変更・中断・終了する場合があります。<br>
     <br>
     <b>【その他】</b><br>
-    ・利用状況の把握のため、匿名のアクセスログを取得する場合があります。<br>
+    ・サービス改善のため、匿名のアクセス状況（利用回数・エラー発生状況等）を統計的に取得する場合があります。<br>
     ・利用規約・ポリシーは随時改定される場合があります。改定後の内容は本画面にて掲示します。<br>
     <br>
     【最終更新日】2025年6月05日<br>
@@ -310,12 +269,28 @@ def show_policy_and_consent() -> bool:
     """
     st.markdown(policy_html, unsafe_allow_html=True)
 
-    # チェックボックスを中央寄せするため、wrap する
+    # --- チェックボックス ---
     st.markdown('<div class="consent-box">', unsafe_allow_html=True)
-    checked = st.checkbox("上記の内容に同意します", key="consent_checkbox", label_visibility="visible")
+    consent = st.checkbox("上記の内容に同意します", key="consent", label_visibility="visible")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    return checked
+    if consent:
+        if st.button("内容を確認して診断をはじめる", key="btn_policy_next"):
+            st.session_state.step = 1
+            st.rerun()
+
+        # 補足コメントを常に表示（ボタンの下）
+        st.markdown(
+            '<div style="margin-top: 8px; font-size: 0.9rem; color: #555555;">'
+            '※ このあと、入力フォームが表示されます。'
+            '</div>',
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            '<div class="err-box">⚠ ご利用には同意が必要です。</div>',
+            unsafe_allow_html=True
+        )
 
 # --- 8️⃣ プラン選択UI ---
 def select_plan() -> str:
@@ -335,6 +310,7 @@ def select_plan() -> str:
                 "Starter（右腕・API連携）準備中",
                 "Pro（参謀・戦略実行支援）準備中",
             ],
+            key="field_plan"
         )
         return plan
 
@@ -363,7 +339,7 @@ def calc_finance_metrics(inp: dict) -> dict:
     loan     = _to_i(inp.get("借入金合計", "0"))
     repay    = _to_i(inp.get("毎月返済額", "0")) * 12
 
-    # 営業CF は簡易的に営業利益と同義とする（個人の場合も同様に「所得金額」を営業CFとみなす）
+    # 営業CF は簡易的に営業利益と同義とする
     op_cf    = max(profit, 0)
 
     # 新指標：営業利益率（個人の場合は所得利益率として扱う）
@@ -392,42 +368,61 @@ def render_exec_summary(inp: dict, fin: dict) -> None:
     新指標（営業利益率・キャッシュ残高/月商・返済負担感）を含める。
     「営業利益／所得金額」は法人／個人で動的切替。
     """
-    # 「法人／個人区分」を判定して、利益表記を動的に設定
     entity_type = inp.get("法人／個人区分", "")
     profit_label = "営業利益" if entity_type == "法人" else "所得金額"
 
-    # 数字を文字列化
-    sales_str         = f"{fin['sales']:,} 円"
-    profit_str        = f"{fin['profit']:,} 円"
-    op_cf_str         = f"{fin['op_cf']:,} 円"
-    profit_margin_str = f"{fin['profit_margin']:.1f}%" if fin.get("profit_margin") is not None else "–"
-    cash_months_str   = f"{fin['cash_months']:.1f} ヶ月分" if fin.get("cash_months") is not None else "–"
-    burden_ratio_str  = f"{fin['burden_ratio']:.1f}%" if fin.get("burden_ratio") is not None else "–"
+    sales_str         = f"{fin['sales']:,} 円" if fin.get("sales") is not None else "未入力"
+    profit_str        = f"{fin['profit']:,} 円" if fin.get("profit") is not None else "未入力"
+    op_cf_str         = f"{fin['op_cf']:,} 円" if fin.get("op_cf") is not None else "未入力"
+    profit_margin_str = f"{fin['profit_margin']:.1f}%" if fin.get("profit_margin") is not None else "未入力"
+    cash_months_str   = f"{fin['cash_months']:.1f} ヶ月分" if fin.get("cash_months") is not None else "未入力"
+    burden_ratio_str  = f"{fin['burden_ratio']:.1f}%" if fin.get("burden_ratio") is not None else "未入力"
 
-    # エグゼクティブサマリー全体を section-card で囲む
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.markdown("###  エグゼクティブサマリー")
 
-    # 左：箇条書き、右：HTMLボックス
+    # 小見出し追加
     col_info, col_boxes = st.columns([2, 3], gap="medium")
 
     with col_info:
-        bullets = [
-            f"**法人／個人区分:** {entity_type}  \n**業種:** {inp.get('業種', '不明')}  \n**地域:** {inp.get('地域', '不明')}",
-            f"**主力商品・サービス:** {inp.get('主力商品・サービス', '不明')}",
-            f"**売上トレンド:** {inp.get('売上高の増減', '不明')}  \n**{profit_label}トレンド:** {inp.get('営業利益の増減／所得金額の増減', '不明')}",
-            f"**主要顧客数トレンド:** {inp.get('主要顧客数の増減', '不明')}  \n**競合環境:** {inp.get('競合の多さ', '不明')}",
-            f"**資金繰り:** {inp.get('資金繰りの状態', '不明')}  \n**借入金合計:** {fin['loan']:,} 円  \n(年返済 {fin['repay']:,} 円)",
-            f"**強みキーワード:** {inp.get('自社の強み', '不明')}  \n**課題キーワード:** {inp.get('経営課題選択', '不明')}",
+        st.markdown("#### 基本情報")
+        bullets_basic = [
+            f"法人／個人区分: {entity_type or '未入力'}",
+            f"業種: {inp.get('業種', '未入力')}",
+            f"地域: {inp.get('地域', '未入力')}"
         ]
-        for b in bullets:
+        for b in bullets_basic:
+            st.markdown(f"- {b}")
+
+        st.markdown("#### 財務状況")
+        bullets_fin = [
+            f"年間売上高: {sales_str}",
+            f"{profit_label}: {profit_str} ({profit_label}率: {profit_margin_str})",
+            f"営業CF (簡易): {op_cf_str}",
+            f"キャッシュ残高/月商: {cash_months_str}",
+            f"借入金合計: {fin['loan']:,} 円 (年間返済: {fin['repay']:,} 円, 返済負担感: {burden_ratio_str})"
+        ]
+        for b in bullets_fin:
+            st.markdown(f"- {b}")
+
+        st.markdown("#### 顧客・競合・課題")
+        bullets_cc = [
+            f"主力商品・サービス: {inp.get('主力商品・サービス', '未入力')}",
+            f"売上トレンド: {inp.get('売上高の増減', '未入力')}",
+            f"{profit_label}トレンド: {inp.get('営業利益の増減／所得金額の増減', '未入力')}",
+            f"主要顧客数トレンド: {inp.get('主要顧客数の増減', '未入力')}",
+            f"競合環境: {inp.get('競合の多さ', '未入力')}",
+            f"資金繰り: {inp.get('資金繰りの状態', '未入力')}",
+            f"強みキーワード: {inp.get('自社の強み', '未入力')}",
+            f"課題キーワード: {inp.get('経営課題選択', '未入力')}"
+        ]
+        for b in bullets_cc:
             st.markdown(f"- {b}")
 
     with col_boxes:
-        # HTMLを使って、各ボックスをフレックスで整列
+        # 数値ボックスはそのまま維持（見やすさ優先）
         html = f"""
 <div style="display: flex; flex-wrap: wrap; gap: 12px;">
-  <!-- 1. 年間売上高 -->
   <div style="
       flex: 1 1 45%;
       border: 1px solid #e0e0e0;
@@ -441,7 +436,6 @@ def render_exec_summary(inp: dict, fin: dict) -> None:
     </div>
   </div>
 
-  <!-- 2. 営業利益／所得金額 -->
   <div style="
       flex: 1 1 45%;
       border: 1px solid #e0e0e0;
@@ -455,7 +449,6 @@ def render_exec_summary(inp: dict, fin: dict) -> None:
     </div>
   </div>
 
-  <!-- 3. 営業利益率／所得利益率 -->
   <div style="
       flex: 1 1 45%;
       border: 1px solid #e0e0e0;
@@ -469,7 +462,6 @@ def render_exec_summary(inp: dict, fin: dict) -> None:
     </div>
   </div>
 
-  <!-- 4. キャッシュ残高 / 月商 -->
   <div style="
       flex: 1 1 45%;
       border: 1px solid #e0e0e0;
@@ -483,7 +475,6 @@ def render_exec_summary(inp: dict, fin: dict) -> None:
     </div>
   </div>
 
-  <!-- 5. 借入金返済負担感 -->
   <div style="
       flex: 1 1 45%;
       border: 1px solid #e0e0e0;
@@ -507,20 +498,20 @@ def render_glossary() -> None:
     with st.expander("📖 用語ミニ辞典"):
         st.markdown("""
 * **営業利益率／所得利益率** – 売上高に対する営業利益／所得金額の割合。利益性の目安。  
-* **キャッシュ残高/月商** – キャッシュが営業を何ヶ月維持できるかの目安。3ヶ月以上が安心水準。  
+* **キャッシュ残高/月商** – キャッシュが営業を何ヶ月維持できるかの目安。3ヶ月以上が無理ない水準。  
 * **返済負担感** – 年間返済額が営業利益／所得金額の何％か。50％以下が無理ない水準。  
 * **5フォース分析（Five Forces Analysis）** – 競争者・新規参入者・代替品・供給者・顧客の5つの力から業界構造を分析する手法。  
 * **VRIO分析** – 強み(Valuable)、希少性(Rare)、模倣困難性(Inimitable)、組織活用力(Organization)の4観点で戦略案を比較し、最も競争優位につながる案を選定する手法。  
 * **PL/BS/CF** – 損益計算書 / 貸借対照表 / キャッシュフロー計算書。  
 """)
 
-# --- 1️⃣3️⃣ 外部環境（PEST＋競合）取得 ---
+# --- 1️⃣3️⃣ 外部環境（PEST＋5フォース＋市場ニーズ＋競合）取得（改良版）---
 def fetch_pest_competition(user_input: dict) -> str | None:
     """
-    外部環境分析用プロンプトを生成し、Responses API で Web検索を実行。  
+    外部環境分析用プロンプトを生成し、Responses API で Web検索を実行。
     優先サイトマスターを事前に加えて検索精度向上を図る。
+    （強化版: PEST/5フォース/市場ニーズ/競合で各種具体的要求を厳密に盛り込む）
     """
-    # 優先サイトリスト（業種別に拡張可能、地方自治体は動的生成）
     static_sites = {
         "全産業": [
             "https://www.boj.or.jp/research/brp/rer/index.htm",
@@ -623,9 +614,6 @@ def fetch_pest_competition(user_input: dict) -> str | None:
             "https://www.jfnet.or.jp/",
         ],
         "地方自治体": [],  # 後で地域から動的に生成
-        "その他（自由入力）": [
-            "https://www.stat.go.jp/data/ssds/index.html",
-        ],
     }
 
     industry = user_input.get("業種", "")
@@ -634,58 +622,22 @@ def fetch_pest_competition(user_input: dict) -> str | None:
     # 地方自治体の場合、地域から県名を抽出してURLを生成
     if industry == "地方自治体":
         region = user_input.get("地域", "")
-        # 地域文字列から「○○県」を抽出
         match = re.match(r".*?([^\s]+?県)", region)
         if match:
             prefecture_name = match.group(1)
             prefecture_slug_map = {
-                "北海道": "hokkaido",
-                "青森県": "aomori",
-                "岩手県": "iwate",
-                "宮城県": "miyagi",
-                "秋田県": "akita",
-                "山形県": "yamagata",
-                "福島県": "fukushima",
-                "茨城県": "ibaraki",
-                "栃木県": "tochigi",
-                "群馬県": "gunma",
-                "埼玉県": "saitama",
-                "千葉県": "chiba",
-                "東京都": "tokyo",
-                "神奈川県": "kanagawa",
-                "新潟県": "niigata",
-                "富山県": "toyama",
-                "石川県": "ishikawa",
-                "福井県": "fukui",
-                "山梨県": "yamanashi",
-                "長野県": "nagano",
-                "岐阜県": "gifu",
-                "静岡県": "shizuoka",
-                "愛知県": "aichi",
-                "三重県": "mie",
-                "滋賀県": "shiga",
-                "京都府": "kyoto",
-                "大阪府": "osaka",
-                "兵庫県": "hyogo",
-                "奈良県": "nara",
-                "和歌山県": "wakayama",
-                "鳥取県": "tottori",
-                "島根県": "shimane",
-                "岡山県": "okayama",
-                "広島県": "hiroshima",
-                "山口県": "yamaguchi",
-                "徳島県": "tokushima",
-                "香川県": "kagawa",
-                "愛媛県": "ehime",
-                "高知県": "kochi",
-                "福岡県": "fukuoka",
-                "佐賀県": "saga",
-                "長崎県": "nagasaki",
-                "熊本県": "kumamoto",
-                "大分県": "oita",
-                "宮崎県": "miyazaki",
-                "鹿児島県": "kagoshima",
-                "沖縄県": "okinawa",
+                "北海道": "hokkaido", "青森県": "aomori", "岩手県": "iwate", "宮城県": "miyagi",
+                "秋田県": "akita", "山形県": "yamagata", "福島県": "fukushima", "茨城県": "ibaraki",
+                "栃木県": "tochigi", "群馬県": "gunma", "埼玉県": "saitama", "千葉県": "chiba",
+                "東京都": "tokyo", "神奈川県": "kanagawa", "新潟県": "niigata", "富山県": "toyama",
+                "石川県": "ishikawa", "福井県": "fukui", "山梨県": "yamanashi", "長野県": "nagano",
+                "岐阜県": "gifu", "静岡県": "shizuoka", "愛知県": "aichi", "三重県": "mie",
+                "滋賀県": "shiga", "京都府": "kyoto", "大阪府": "osaka", "兵庫県": "hyogo",
+                "奈良県": "nara", "和歌山県": "wakayama", "鳥取県": "tottori", "島根県": "shimane",
+                "岡山県": "okayama", "広島県": "hiroshima", "山口県": "yamaguchi", "徳島県": "tokushima",
+                "香川県": "kagawa", "愛媛県": "ehime", "高知県": "kochi", "福岡県": "fukuoka",
+                "佐賀県": "saga", "長崎県": "nagasaki", "熊本県": "kumamoto", "大分県": "oita",
+                "宮崎県": "miyazaki", "鹿児島県": "kagoshima", "沖縄県": "okinawa",
             }
             slug = prefecture_slug_map.get(prefecture_name, None)
             if slug:
@@ -699,35 +651,131 @@ def fetch_pest_competition(user_input: dict) -> str | None:
 
     query = (
         f"{user_input.get('地域', '')} {industry} {user_input.get('主力商品・サービス', '')} "
-        f"業界 {user_input.get('主な関心テーマ', user_input.get('経営課題選択', 'トレンド'))} 最新動向 PEST 競合"
+        f"業界 {user_input.get('主な関心テーマ', user_input.get('経営課題選択', 'トレンド'))} 最新動向 PEST 市場ニーズ 競合"
     )
     prompt = (
         f"あなたはトップクラスの経営コンサルタントです。\n"
         f"{sites_text}"
-        "外部環境分析（PEST＋5フォース分析＋競合分析）をA4 1～2枚分・専門家レポート並みに詳しく、日本語で出力。\n"
-        "■現時点の最新Web情報を参照し、各PEST項目ごとに実例・統計・法改正・消費者動向・AI/デジタル事例まで厚く\n"
-        "■5フォース分析で業界構造を分析、主要競合5社以上の特徴・最新ニュース・ベンチマーク事例を具体的に\n"
-        "■必ず根拠や数値、出典を添え、参考Webリスト10件（タイトル＋URL）も示すこと\n"
-        "■抽象論・一般論は禁止。必ず事実・出典・専門家の視点で。\n\n"
+        "以下の要件を厳格に守り、外部環境分析（PEST＋5フォース分析＋市場ニーズ＋競合分析）をA4 1～2枚分・専門家レポート並みに詳しく、日本語で出力してください。\n\n"
+        "■ PEST分析（Political, Economic, Social, Technological）:\n"
+        "  ・各PEST項目ごとに「実例／統計データ／政策動向／法改正／市場規模／成長率」を最低1件以上示す。\n"
+        "■ 5フォース分析:\n"
+        "  ・新規参入、供給者、買い手、代替品、業界内競争の5つすべてを文章で深掘りし、各項目を最低1段落以上書く。\n"
+        "■ 市場ニーズ分析:\n"
+        "  ・消費者ニーズ、市場成長性、需要変化、購買動向を最低3点示し、必ず数値や事例を含める。\n"
+        "■ 競合分析:\n"
+        "  ・主要競合を5社以上取り上げ、それぞれ「企業名／主な事業内容／強み／弱み／最新ニュース・事例（URL付）」をすべて記載する。\n"
+        "■ 出典URL:\n"
+        "  ・最低5件以上、推奨10件以上をMarkdownリンク形式で必ず示す。\n"
+        "■ 抽象論・一般論は禁止。必ず対象地域と業種に基づく具体的事実・データを活用する。\n\n"
         f"【検索テーマ】{query}\n"
     )
 
-    with st.spinner("Web検索＋PEST/競合AI分析中…"):
+    with st.spinner("Web検索＋PEST/市場ニーズ/競合AI分析中…"):
         try:
-           response = client.responses.create(
-    model="gpt-4o",
-    input=prompt,
-    tools=[{"type": "web_search"}]
-)
-           return response.output_text
+            response = client.responses.create(
+                model="gpt-4o",
+                input=prompt,
+                tools=[{"type": "web_search"}]
+            )
+            return response.output_text
         except Exception as e:
             st.error(f"Responses APIエラー: {e}")
             return None
 
+# --- 段階出力モード用 make_prompt_chapter() ---
+def make_prompt_chapter(chapter_num: int) -> str:
+    """
+    段階出力モード用プロンプトを生成する関数。
+    chapter_num: 現在出力したい章番号 (1〜9)
+    """
+    entity_type = st.session_state.user_input.get("法人／個人区分", "不明")
+    profit_label = "営業利益" if entity_type == "法人" else "所得金額"
+
+    # 財務指標を文字列化
+    fin = st.session_state.fin
+    profit_margin_val = fin.get("profit_margin")
+    profit_margin_str = f"{profit_margin_val:.1f}%" if profit_margin_val is not None else "不明"
+    cash_months_val = fin.get("cash_months")
+    cash_months_str = f"{cash_months_val:.1f} ヶ月分" if cash_months_val is not None else "不明"
+    burden_ratio_val = fin.get("burden_ratio")
+    burden_ratio_str = f"{burden_ratio_val:.1f}%" if burden_ratio_val is not None else "不明"
+
+    # 章タイトルマスター
+    chapter_titles = {
+        1: "1. 外部環境分析",
+        2: "2. 内部環境分析",
+        3: "3. 経営サマリー",
+        4: "4. 真因分析",
+        5: "5. 戦略アイディア",
+        6: "6. VRIO分析",
+        7: "7. 実行計画",
+        8: "8. 次回モニタリング・PDCA設計",
+        9: "9. 参考データ・URL"
+    }
+    chapter_title = chapter_titles.get(chapter_num, f"{chapter_num}. 未定義章")
+
+    prompt = f"""
+あなたは超一流の戦略系経営コンサルタントです。
+
+これから **段階出力モード** でレポートを作成します。  
+【第 {chapter_num} 章】（{chapter_title}）のみを、**必ず章番号と章タイトルをつけて出力**してください。  
+
+【段階出力ルール】
+
+・**1回に1章ずつのみ出力する**（他章は出力しない）。  
+・章タイトルが飛ばないよう、「章番号＋章タイトル＋本文」の順で必ず出力する。  
+・**未入力項目は「未入力」「不明」と明記**し、AI補完・推測は禁止。  
+・抽象論・一般論は禁止。**ユーザー入力・外部データ**を最大限活用する。  
+・**「質問モード」になったり、途中停止することは禁止**。  
+・章番号が正しいか必ず確認すること。  
+
+---
+
+【今回出力する章】  
+→ **{chapter_title}**（第 {chapter_num} 章のみ）  
+
+---
+
+【法人／個人区分】:
+{entity_type}
+
+【地域】:
+{st.session_state.user_input.get("地域", "未入力")}
+
+【業種】:
+{st.session_state.user_input.get("業種", "未入力")}
+
+【主力商品・サービス】:
+{st.session_state.user_input.get("主力商品・サービス", "未入力")}
+
+【財務指標】:
+- 年間売上高: {fin['sales']:,} 円
+- {profit_label}: {fin['profit']:,} 円
+- 営業CF (簡易): {fin['op_cf']:,} 円
+- {profit_label}率: {profit_margin_str}
+- キャッシュ残高/月商: {cash_months_str}
+- 借入金合計: {fin['loan']:,} 円
+- 年間返済額: {fin['repay']:,} 円
+- 返済負担感: {burden_ratio_str}
+
+【ユーザー情報】:
+{st.session_state.user_input}
+
+【AI深掘り質問＋ユーザー回答】:
+{st.session_state.ai_question}
+{st.session_state.user_answer}
+
+【外部環境（PEST・市場ニーズ・競合・Web情報）】:
+{st.session_state.display_env}
+"""
+    return prompt
+
 # --- 1️⃣4️⃣ PDF生成（目次自動生成付き） ---
 def create_pdf(text_sections: list[dict], filename: str = "AI_Dock_Report.pdf") -> io.BytesIO:
     """
-    PDFを生成します。目次ページを自動挿入。VRIO分析セクションは「最終案のみ」を反映。
+    PDFを生成します。目次ページを自動挿入。
+    VRIO分析セクションは完全にスキップし、見やすい PDF レイアウトにする。
     """
     buffer = io.BytesIO()
     pdfmetrics.registerFont(TTFont("IPAexGothic", "ipag.ttf"))
@@ -767,16 +815,19 @@ def create_pdf(text_sections: list[dict], filename: str = "AI_Dock_Report.pdf") 
         spaceAfter=4,
     )
     elements.append(Paragraph("目次", toc_style_title))
-    for idx, sec in enumerate(text_sections, start=1):
+    # VRIOセクションを除いたセクションリスト
+    filtered_sections = [sec for sec in text_sections if sec.get("title") != "VRIO分析"]
+    for idx, sec in enumerate(filtered_sections, start=1):
         title = sec.get("title", "")
-        elements.append(Paragraph(f"{idx}. {title} ......", toc_style_item))
+        elements.append(Paragraph(f"{idx}. {title}", toc_style_item))
     elements.append(Spacer(1, 20))
 
     # 各セクションをPDFに追加
-    for sec in text_sections:
+    for sec in filtered_sections:
         title = sec.get("title", "")
         text = sec.get("text", "")
 
+        # 見出しスタイル
         if title:
             section_style = ParagraphStyle(
                 "Section",
@@ -791,24 +842,38 @@ def create_pdf(text_sections: list[dict], filename: str = "AI_Dock_Report.pdf") 
             )
             elements.append(Paragraph(title, section_style))
 
+        # 本文スタイル（行間・スペース調整）
         para_style = ParagraphStyle(
             "Body",
             fontName="IPAexGothic",
             fontSize=11,
             textColor=colors.black,
-            leading=18,
-            spaceAfter=8,
+            leading=18,      # 行間を18に
+            spaceAfter=10,   # 段落間スペースを10に
             leftIndent=0,
             alignment=0,
         )
+
+        # VRIO分析はすべてスキップ済み
+        # それ以外のセクションは段落ごとに追加
         for para in text.split("\n\n"):
-            para = para.strip()
-            if para:
-                elements.append(Paragraph(para, para_style))
+            clean_para = para.strip().replace("**", "")  # 太字マーク削除
+            # 番号付きリストを箇条書きに変換
+            if re.match(r"^\s*\d+\.\s+", clean_para):
+                # リストアイテムを分割
+                items = re.split(r"\s*\d+\.\s+", clean_para)[1:]
+                lf = ListFlowable(
+                    [ListItem(Paragraph(item.strip(), para_style), leftIndent=12) for item in items],
+                    bulletType="bullet",
+                    start="circle"
+                )
+                elements.append(lf)
+            else:
+                if clean_para:
+                    # リンク [text](url) は "text (url)" に変換
+                    clean_para = re.sub(r"\[([^\]]+)\]\((https?://[^\)]+)\)", r"\1 (\2)", clean_para)
+                    elements.append(Paragraph(clean_para, para_style))
 
-        elements.append(Spacer(1, 10))
-
-    # PDF ビルド
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
@@ -862,58 +927,43 @@ def input_form(plan: str) -> None:
     )
     st.markdown(
         '<div class="info-box">'
-        '★ 必須項目は「★」マーク。  \n'
-        '★ 数字は半角数字のみ（カンマ不要）。  \n'
-        '★ 住所は「番地まで書くと外部環境分析の精度が上がります」（任意）。  \n'
-        '★ 入力は社長の感覚・主観でOKです。'
+        '・必須項目は「★」マーク。  \n'
+        '・数字は半角数字のみ（カンマ不要）。  \n'
+        '・住所は「番地まで書くと外部環境分析の精度が上がります」（任意）。  \n'
+        '・入力は社長の感覚・主観でOKです。'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    # セッション完全リセットボタン（すべてクリア）
-    if st.button("セッション完全リセット（全初期化）"):
-        st.session_state.clear()
-        st.experimental_rerun()
-
-    if st.button("⟳ 入力内容をリセットして再入力する"):
-        for key in list(st.session_state.keys()):
-            if key.startswith("field_") or key in ["user_input", "ai_question", "user_answer", "final_report", "text_sections", "keep_report", "pdf_buffer", "log"]:
-                del st.session_state[key]
-        st.rerun()
-
     with st.form("form1"):
         col1, col2 = st.columns(2, gap="large")
-
-        # 前回入力をセッションから復元
         prev = st.session_state.get("user_input", {})
 
-        # 左カラム：基本情報と売上・財務
         with col1:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.markdown("#### 基本情報")
 
-            # 法人／個人選択
             entity_type = st.radio(
                 "★法人／個人事業主の区分",
                 options=["法人", "個人事業主"],
                 horizontal=True,
-                index=["法人", "個人事業主"].index(prev.get("法人／個人区分", "法人"))
+                index=["法人", "個人事業主"].index(prev.get("法人／個人区分", "法人")),
+                key="field_entity_type"
             )
-            st.session_state["field_entity_type"] = entity_type
 
             company_name = st.text_input(
                 "★会社名（屋号でもOK）",
                 value=prev.get("会社名", ""),
-                placeholder="例：株式会社サンプルアパレル／〇〇工房"
+                placeholder="例：株式会社サンプルアパレル／〇〇工房",
+                key="field_company_name"
             )
-            st.session_state["field_company_name"] = company_name
 
             region = st.text_input(
                 "★地域（番地まで任意）",
                 value=prev.get("地域", ""),
-                placeholder="例：東京都新宿区西新宿2-8-1"
+                placeholder="例：東京都新宿区西新宿2-8-1",
+                key="field_region"
             )
-            st.session_state["field_region"] = region
 
             industry_master = [
                 "製造業（食品）", "製造業（化学）", "製造業（金属）", "製造業（機械）", "製造業（その他）",
@@ -921,145 +971,147 @@ def input_form(plan: str) -> None:
                 "小売業（食品）", "小売業（日用品）", "小売業（衣料品）", "小売業（その他）",
                 "サービス業（医療・福祉）", "サービス業（教育）", "サービス業（IT・ソフトウェア）", "サービス業（コンサル）", "サービス業（その他）",
                 "飲食業（飲食店・カフェ）", "飲食業（居酒屋・バー）", "飲食業（その他）",
-                "地方自治体",
-                "その他（自由入力）"
+                "地方自治体"
             ]
-            selected_industry = prev.get("業種", "製造業（食品）")
+            selected_industry = prev.get("業種", "")
             if selected_industry not in industry_master:
-                selected_industry = "その他（自由入力）"
+                selected_industry = industry_master[0]
             industry = st.selectbox(
                 "★業種",
                 industry_master,
-                index=industry_master.index(selected_industry)
+                index=industry_master.index(selected_industry),
+                key="field_industry"
             )
-            st.session_state["field_industry"] = industry
 
-            industry_free = ""
-            if industry == "その他（自由入力）":
-                industry_free = st.text_input(
-                    "業種（自由入力）",
-                    value=prev.get("業種", "") if prev.get("業種", "") not in industry_master else "",
-                    placeholder="例：エンタメ系サービス業"
-                )
-                st.session_state["field_industry_free"] = industry_free
+            industry_free = st.text_input(
+                "業種（上記にない場合はこちらにご記入ください）",
+                value=prev.get("業種（リスト外）", ""),
+                placeholder="例：エンタメ系サービス業、複合型施設 など",
+                key="field_industry_free"
+            )
 
             main_product = st.text_input(
                 "★主力の商品・サービス",
                 value=prev.get("主力商品・サービス", ""),
-                placeholder="例：高級食パン／業務用厨房機器／化粧品OEM など"
+                placeholder="例：高級食パン／業務用厨房機器／化粧品OEM など",
+                key="field_main_product"
             )
-            st.session_state["field_main_product"] = main_product
 
             main_theme = st.text_input(
                 "主な関心テーマ",
                 value=prev.get("主な関心テーマ", ""),
-                placeholder="市場動向、競合動向など"
+                placeholder="市場動向、競合動向など",
+                key="field_main_theme"
             )
-            st.session_state["field_main_theme"] = main_theme
 
             st.markdown('</div>', unsafe_allow_html=True)
 
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.markdown("#### 売上・財務")
+
             sales = st.text_input(
                 "★年間売上高（円）",
                 value=prev.get("年間売上高", ""),
-                placeholder="90000000"
+                placeholder="90000000",
+                key="field_sales"
             )
-            st.session_state["field_sales"] = sales
 
             sale_trend = st.selectbox(
                 "売上高の増減",
                 ["増加", "変わらない", "減少"],
-                index=["増加", "変わらない", "減少"].index(prev.get("売上高の増減", "増加")) if prev.get("売上高の増減") in ["増加", "変わらない", "減少"] else 0,
-                help="現在の売上高が前年と比べて増加／変わらない／減少しているかを選択してください"
+                index=["増加", "変わらない", "減少"].index(prev.get("売上高の増減", "増加"))
+                    if prev.get("売上高の増減") in ["増加", "変わらない", "減少"] else 0,
+                help="現在の売上高が前年と比べて増加／変わらない／減少しているかを選択してください",
+                key="field_sale_trend"
             )
-            st.session_state["field_sale_trend"] = sale_trend
 
-            # 「営業利益／所得金額」は法人／個人で切替
             profit_label = "営業利益（円）" if entity_type == "法人" else "所得金額（円）"
             profit = st.text_input(
                 f"★{profit_label}",
                 value=prev.get("営業利益／所得金額", ""),
-                placeholder="2000000"
+                placeholder="2000000",
+                key="field_profit"
             )
-            st.session_state["field_profit"] = profit
 
             profit_trend_label = "営業利益の増減" if entity_type == "法人" else "所得金額の増減"
             profit_trend = st.selectbox(
                 profit_trend_label,
                 ["増加", "変わらない", "減少"],
-                index=["増加", "変わらない", "減少"].index(prev.get("営業利益の増減／所得金額の増減", "増加")) if prev.get("営業利益の増減／所得金額の増減") in ["増加", "変わらない", "減少"] else 0,
-                help="現在の利益が前年と比べて増加／変わらない／減少しているかを選択してください"
+                index=["増加", "変わらない", "減少"].index(prev.get("営業利益の増減／所得金額の増減", "増加"))
+                    if prev.get("営業利益の増減／所得金額の増減") in ["増加", "変わらない", "減少"] else 0,
+                help="現在の利益が前年と比べて増加／変わらない／減少しているかを選択してください",
+                key="field_profit_trend"
             )
-            st.session_state["field_profit_trend"] = profit_trend
 
             cash = st.text_input(
                 "現金・預金残高（円）",
                 value=prev.get("現金・預金残高", ""),
-                placeholder="5000000"
+                placeholder="5000000",
+                key="field_cash"
             )
-            st.session_state["field_cash"] = cash
 
             loan_total = st.text_input(
                 "借入金合計（円）",
                 value=prev.get("借入金合計", ""),
-                placeholder="10000000"
+                placeholder="10000000",
+                key="field_loan_total"
             )
-            st.session_state["field_loan_total"] = loan_total
 
             monthly_repayment = st.text_input(
                 "毎月返済額（円）",
                 value=prev.get("毎月返済額", ""),
-                placeholder="200000"
+                placeholder="200000",
+                key="field_monthly_repayment"
             )
-            st.session_state["field_monthly_repayment"] = monthly_repayment
 
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # 右カラム：組織・顧客と現場ヒアリング・強み
         with col2:
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.markdown("#### 組織・顧客")
+
             employee = st.text_input(
                 "従業員数",
                 value=prev.get("従業員数", ""),
-                placeholder="18"
+                placeholder="18",
+                key="field_employee"
             )
-            st.session_state["field_employee"] = employee
 
             customer_type = st.text_input(
                 "主な顧客層",
                 value=prev.get("主な顧客層", ""),
-                placeholder="個人顧客／若年層中心"
+                placeholder="個人顧客／若年層中心",
+                key="field_customer_type"
             )
-            st.session_state["field_customer_type"] = customer_type
 
             customer_trend = st.selectbox(
                 "主要顧客数の増減",
                 ["増加", "変わらない", "減少"],
-                index=["増加", "変わらない", "減少"].index(prev.get("主要顧客数の増減", "増加")) if prev.get("主要顧客数の増減") in ["増加", "変わらない", "減少"] else 0,
-                help="現在の主要顧客数が増加／変わらない／減少しているかを選択してください"
+                index=["増加", "変わらない", "減少"].index(prev.get("主要顧客数の増減", "増加"))
+                    if prev.get("主要顧客数の増減") in ["増加", "変わらない", "減少"] else 0,
+                help="現在の主要顧客数が増加／変わらない／減少しているかを選択してください",
+                key="field_customer_trend"
             )
-            st.session_state["field_customer_trend"] = customer_trend
 
             channel = st.text_input(
-                "主な販売チャネル",
+                "★主な販売チャネル",
                 value=prev.get("主な販売チャネル", ""),
-                placeholder="店舗／EC／SNS"
+                placeholder="店舗／EC／SNS",
+                key="field_channel"
             )
-            st.session_state["field_channel"] = channel
 
             competitor = st.selectbox(
                 "競合の多さ",
                 ["多い", "普通", "少ない"],
-                index=["多い", "普通", "少ない"].index(prev.get("競合の多さ", "普通")) if prev.get("競合の多さ") in ["多い", "普通", "少ない"] else 1
+                index=["多い", "普通", "少ない"].index(prev.get("競合の多さ", "普通"))
+                    if prev.get("競合の多さ") in ["多い", "普通", "少ない"] else 1,
+                key="field_competitor"
             )
-            st.session_state["field_competitor"] = competitor
             st.markdown('</div>', unsafe_allow_html=True)
 
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.markdown("#### 現場ヒアリング・強み")
+
             hearing_raw_default = "\n".join(prev.get("現場ヒアリング所見", []))
             hearing_raw = st.text_area(
                 "★現場・営業・顧客などの“生の声”や現場所見（1～3行、肌感でOK）",
@@ -1067,7 +1119,8 @@ def input_form(plan: str) -> None:
                 height=110,
                 placeholder=(
                     "例：販売スタッフ「来店客数が前年同月比で15%減少しています。特に平日の午後はほとんど動きがありません。」"
-                )
+                ),
+                key="field_hearing_raw"
             )
             hearing_list = [s.strip() for s in hearing_raw.split("\n") if s.strip()]
             st.session_state["field_hearing_list"] = hearing_list
@@ -1075,37 +1128,37 @@ def input_form(plan: str) -> None:
             strength = st.text_input(
                 "自社の強み（主観でOK、1文）",
                 value=prev.get("自社の強み", ""),
-                placeholder="地元密着の接客／独自セレクト商品"
+                placeholder="地元密着の接客／独自セレクト商品",
+                key="field_strength"
             )
-            st.session_state["field_strength"] = strength
 
             issue_choice = st.selectbox(
                 "★最も課題と感じるテーマ",
                 ["資金繰り", "売上低迷", "人材確保", "新規顧客獲得", "その他"],
-                index=["資金繰り", "売上低迷", "人材確保", "新規顧客獲得", "その他"].index(prev.get("経営課題選択", "資金繰り"))
+                index=["資金繰り", "売上低迷", "人材確保", "新規顧客獲得", "その他"].index(prev.get("経営課題選択", "資金繰り")),
+                key="field_issue_choice"
             )
-            st.session_state["field_issue_choice"] = issue_choice
 
             issue_detail = st.text_area(
-                "課題の具体的な内容（1～2行でOK）",
+                "★課題の具体的な内容（1〜2行でOK）",
                 value=prev.get("経営課題自由記述", ""),
                 height=70,
-                placeholder="来店客数の減少と在庫回転の悪化"
+                placeholder="来店客数の減少と在庫回転の悪化",
+                key="field_issue_detail"
             )
-            st.session_state["field_issue_detail"] = issue_detail
 
             cash_status = st.selectbox(
                 "資金繰りの状態",
                 ["安定", "やや不安", "危機的"],
-                index=["安定", "やや不安", "危機的"].index(prev.get("資金繰りの状態", "安定"))
+                index=["安定", "やや不安", "危機的"].index(prev.get("資金繰りの状態", "安定")),
+                key="field_cash_status"
             )
-            st.session_state["field_cash_status"] = cash_status
 
             legal_flag = st.checkbox(
                 "法律・税務・社労士領域等の専門的な悩みも入力した場合はチェック",
-                value=prev.get("法務税務フラグ", False)
+                value=prev.get("法務税務フラグ", False),
+                key="field_legal_flag"
             )
-            st.session_state["field_legal_flag"] = legal_flag
 
             external_env = st.text_area(
                 "外部環境・市況感（例：人口減、材料高騰、業界再編等）",
@@ -1113,15 +1166,13 @@ def input_form(plan: str) -> None:
                 height=70,
                 placeholder=(
                     "コロナ禍以降、商業施設の来場者数が減少傾向。ECサイト利用率上昇。為替変動による仕入価格上昇など。"
-                )
+                ),
+                key="field_external_env"
             )
-            st.session_state["field_external_env"] = external_env
-
             st.markdown('</div>', unsafe_allow_html=True)
 
         # --- バリデーション ---
         errors = []
-        # 非負整数が必要なフィールド
         non_neg_fields = [
             ("年間売上高", sales),
             ("借入金合計", loan_total),
@@ -1133,14 +1184,11 @@ def input_form(plan: str) -> None:
             if val and not is_valid_non_negative(val):
                 errors.append(f"「{label}」は0以上の半角数字のみ入力してください。")
 
-        # 利益フィールドは整数（負数含む）許容
         if profit and not is_integer(profit):
             errors.append(f"「{profit_label}」は整数で入力してください。")
 
-        # 業種：自由入力がある場合はそちらを優先
-        industry_value = industry_free if (industry == "その他（自由入力）" and industry_free.strip()) else industry
+        industry_value = industry_free.strip() if industry_free.strip() else industry
 
-        # 必須項目チェック
         for key, val in [
             ("会社名", company_name),
             ("地域", region),
@@ -1157,56 +1205,19 @@ def input_form(plan: str) -> None:
         if not issue_detail.strip():
             errors.append("課題の具体的な内容は必須です")
 
-        # --- Submitボタン ---
-        submit = st.form_submit_button("▶ 一次入力を送信し、AIの追加質問を受ける")
+        submit = st.form_submit_button("▶ AI診断を開始する")
         if errors and submit:
             st.markdown('<div class="err-box">' + "<br>".join(errors) + '</div>', unsafe_allow_html=True)
             return
 
-        # --- Submit成功時 ---
         if submit:
-            # 地域マスキング（市区町村まで）
-            masked_region = region.split(" ")[0] if " " in region else region
-
-            # 会社名マスキングは先頭2文字＋残り全て＊
-            masked_company = (company_name[:2] + "＊" * (len(company_name) - 2)) if company_name else ""
-
-            save_row = [
-                entity_type,
-                masked_company,
-                masked_region,
-                industry_value,
-                main_product,
-                sales,
-                sale_trend,
-                profit,
-                profit_trend,
-                loan_total,
-                monthly_repayment,
-                cash,
-                employee,
-                customer_type,
-                customer_trend,
-                channel,
-                competitor,
-                issue_choice,
-                issue_detail,
-                strength,
-                cash_status,
-                ";".join(hearing_list),
-                external_env,
-                plan,
-                str(legal_flag),
-                main_theme,
-            ]
-            # 任意化されたスプレッド保存を実行（画面には何も表示しない）
-            save_to_gsheet(save_row)
-
+            # セッションにユーザー入力データを保存
             st.session_state.user_input = {
                 "法人／個人区分": entity_type,
                 "会社名": company_name,
                 "地域": region,
                 "業種": industry_value,
+                "業種（リスト外）": industry_free,
                 "主力商品・サービス": main_product,
                 "主な関心テーマ": main_theme,
                 "年間売上高": sales,
@@ -1237,6 +1248,26 @@ def input_form(plan: str) -> None:
             st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="button-bar">', unsafe_allow_html=True)
+    if st.button("⟳ 入力内容をリセット", key="btn_reset_partial"):
+        for key in list(st.session_state.keys()):
+            if key.startswith("field_") or key in [
+                "user_input", "ai_question", "user_answer",
+                "final_report", "text_sections", "keep_report",
+                "pdf_buffer", "log", "fin", "display_env"
+            ]:
+                del st.session_state[key]
+        st.rerun()
+    if st.button("🚫 セッション完全リセット", key="btn_reset_full"):
+        st.session_state.clear()
+        st.session_state["_rerun_triggered"] = True
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.session_state.get("_rerun_triggered", False):
+        st.session_state["_rerun_triggered"] = False
+        st.rerun()
 
 # --- 1️⃣8️⃣ AI追加質問フェーズ ---
 def ai_deep_question() -> None:
@@ -1273,7 +1304,6 @@ def ai_deep_question() -> None:
             )
             ai_question = q_resp.choices[0].message.content
             st.session_state.ai_question = ai_question
-            # ログにプロンプトと質問
             st.session_state.log.append({
                 "stage": "deep_question",
                 "prompt": question_prompt,
@@ -1292,16 +1322,14 @@ def ai_deep_question() -> None:
             "上記のAI質問へのご回答を自由にご記入ください（実名・役職・頻度・金額・根拠・失敗経験もできるだけ具体的に）",
             value=prev_answer,
             height=150,
+            key="field_user_answer"
         )
-        submit2 = st.form_submit_button("▶ 経営診断レポートの生成")
+        submit2 = st.form_submit_button("▶ 診断レポートを生成")
 
-    # ＜ 戻る ボタン（中央寄せ）＞
-    st.markdown('<div class="center-button">', unsafe_allow_html=True)
-    back_col1, back_col2, back_col3 = st.columns([1, 1, 1])
-    with back_col2:
-        if st.button("← 戻る"):
-            st.session_state.step = 1
-            st.rerun()
+    st.markdown('<div class="button-bar">', unsafe_allow_html=True)
+    if st.button("← 戻る", key="btn_back_to_step1"):
+        st.session_state.step = 1
+        st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
     if submit2:
@@ -1320,10 +1348,10 @@ def generate_report(font_path: str) -> None:
     st.markdown('<div class="widecard">', unsafe_allow_html=True)
     st.subheader("AI経営診断GPTレポート")
 
-    # 財務指標を計算
+    # 財務指標計算をセッションに保存
     fin = calc_finance_metrics(st.session_state.user_input)
+    st.session_state.fin = fin
 
-    # タブで EXEC SUMMARY／詳細レポート／用語辞典 を切り替え
     tab_exec, tab_report, tab_gloss = st.tabs(["EXEC SUMMARY", "詳細レポート", "用語辞典"])
 
     with tab_exec:
@@ -1333,74 +1361,145 @@ def generate_report(font_path: str) -> None:
         render_glossary()
 
     with tab_report:
-        # 既に生成済みなら再利用（セッション内）
+        # すでに生成済みなら再利用
         if "final_report" not in st.session_state or not st.session_state.get("keep_report", False):
             st.info("AI診断レポート生成中… 進捗状況を表示します。")
             progress = st.progress(0)
 
-            user_input  = st.session_state.user_input
-            ai_question = st.session_state.ai_question
-            user_answer = st.session_state.user_answer
+            user_input   = st.session_state.user_input
+            ai_question  = st.session_state.ai_question
+            user_answer  = st.session_state.user_answer
 
-            # 外部環境データをAI＋Web検索で取得
+            # --- 外部環境データ取得 ---
             with st.spinner("外部環境データ取得中…"):
-                external_env_text = fetch_pest_competition(user_input) or "（外部環境分析取得エラー）"
+                external_env_text = fetch_pest_competition(user_input) or ""
             progress.progress(20)
 
-            # レポート作成プロンプト組立
+            # display_env をセッションに保存
+            if external_env_text.strip() == "" or "取得エラー" in external_env_text:
+                display_env = "未入力：外部環境分析情報が不足しています。"
+            else:
+                display_env = external_env_text.strip()
+            st.session_state.display_env = display_env
+
+            # --- レポート作成プロンプト組立 ---
             def make_prompt() -> str:
                 entity_type = user_input.get("法人／個人区分", "不明")
                 profit_label = "営業利益" if entity_type == "法人" else "所得金額"
                 profit_trend_label = "営業利益トレンド" if entity_type == "法人" else "所得金額トレンド"
 
+                # 財務指標の文字列化
+                profit_margin_val = fin.get("profit_margin")
+                profit_margin_str = f"{profit_margin_val:.1f}%" if profit_margin_val is not None else "不明"
+                cash_months_val = fin.get("cash_months")
+                cash_months_str = f"{cash_months_val:.1f} ヶ月分" if cash_months_val is not None else "不明"
+                burden_ratio_val = fin.get("burden_ratio")
+                burden_ratio_str = f"{burden_ratio_val:.1f}%" if burden_ratio_val is not None else "不明"
+
                 return f"""
 あなたは超一流の戦略系経営コンサルタントです。
-以下の順で、現場合意・納得感を重視した診断レポートをA4一枚分で作成してください。
 
-【構成順】
-1. 外部環境分析（PEST・5フォース分析・競合分析。前述のWEB調査内容を厚く、統計・事例を盛り込むこと）
-2. 内部環境分析（現場ヒアリング・ユーザー入力内容を厚く活用し、AI推測は絶対禁止）
-3. 経営サマリー（現状数字・主な課題。ユーザー未入力項目は「不明」「未入力」と明記し、AI推測禁止）
-4. 真因分析（KPI悪化の本当の原因を現場視点で分析。AI推測禁止）
-5. 戦略アイディア（必ず4案。クロスSWOTのS×Oを中心に、根拠を明示する。投資額・効果・回収月数を必ず記載する）
-6. VRIO分析（4案をV/R/I/Oで「数値（1～5点）」で点数化する。**「高・中・低」表現は禁止。点数で統一**。
-   ・必ず「最もスコア高い案: ○○○」を明示する。
-   ・VRIO表の下に評価基準例（例：5点=極めて高い競争優位、1点=低い）も必ず記載する。
-   ・PDF化時は最終案のみ強調表示すること。）
-7. 実行計画（最も優先すべき案について、KPI・担当・期限・リスク・最初の一歩を5W1Hで明確に記載する）
-8. 次回モニタリング・PDCA設計（次回のチェック観点・進め方・指標などを具体的に記載する）
-9. 参考データ・URL（参考としたデータや出典URLを記載する）
+以下の順で、**現場の社長／経営者がそのまま社内外に使える「納品レベルの詳細レポート（約A4 2〜3枚相当の情報量）」**を作成してください。
+構成順は必ず守り、各章で抜け漏れ・薄さがないよう、具体的な数値・事例・出典URLを必ず示してください。
+未入力の箇所は「未入力」「不明」と明記し、AI推測は禁止です。
+
+【構成順】（順番は絶対厳守。全項目を必ず出力すること）
+
+1. 外部環境分析  
+   ・PEST分析(Political, Economic, Social, Technological)では各項目ごとに「実例／統計データ／政策動向／法改正／市場規模／成長率」の具体数値・事例を最低1件以上示すこと。  
+   ・5フォース分析では「新規参入」「供給者」「買い手」「代替品」「業界内競争」の5項目すべてを深掘りし、各1段落以上記載すること。  
+   ・市場ニーズ分析では「消費者ニーズ」「市場成長性」「需要変化」「購買動向」の最低3点を示し、必ず数値・事例を含めること。  
+   ・競合分析では主要競合5社以上を取り上げ、「企業名」「主な事業内容」「強み」「弱み」「最新ニュース・事例(URL付)」すべて記載すること。  
+   ・出典URLは最低5件以上、推奨10件以上をMarkdownリンク形式で必ず示し、情報の信頼性を担保すること。  
+   ・抽象論・一般論は禁止。必ず対象地域・業種に基づく具体的事実・データを活用すること。  
+   ・未入力の場合は「外部環境分析: 未入力」と明記し、出力を続行すること。
+
+2. 内部環境分析  
+   ・現場ヒアリング所見やユーザー入力を可能な限り活用し、従業員の声・内部プロセス改善状況を具体的に記載すること。  
+   ・ユーザー未入力項目は「未入力」と明記し、AI推測を行わないこと。  
+   ・現場視点での課題・ボトルネックを整理し、事例・数値を含めること。
+
+3. 経営サマリー  
+   ・「現状数字(財務指標)」「主な課題(ユーザー入力)」を整理し、内部情報と矛盾がないように記載すること。  
+   ・ユーザー未入力項目は「未入力」「不明」と明記し、AI推測を禁止すること。  
+   ・簡潔に要点をまとめ、社内外に提示できるレベルの品質とすること。
+
+4. 真因分析  
+   ・KPI悪化の本当の原因を、現場視点で要因分解し、論理的に分析すること。  
+   ・ユーザー入力内容を最大限活用し、AIによる勝手な推測は禁止すること。  
+   ・未入力の場合は「未入力」と明記し、先に進めること。
+
+5. 戦略アイディア  
+   ・必ず4案を提示し、各案について以下を明確に記載すること：  
+     ① 案名  
+     ② 根拠・事例  
+     ③ 投資額（数値）  
+     ④ 期待効果（数値目標）  
+     ⑤ 回収月数（数値）  
+     ⑥ 他案との差別性・選定理由（なぜこの案が最適か、他案はなぜ劣るか）  
+   ・クロスSWOTのS×Oを中心とし、具体的な数値・事例を使って説得力を高めること。
+
+6. VRIO分析  
+   ・上記の4案を「Valuable（価値）」「Rare（希少性）」「Inimitable（模倣困難性）」「Organization（組織活用力）」の4観点で、必ず数値(1～5点)で点数化し、Markdown表形式で出力すること。  
+   ・「高・中・低」といった表現は禁止し、必ず数値を使用すること。  
+   ・表の下に評価基準例(例：5点=極めて高い競争優位、1点=競争優位がほとんどない)を必ず記載すること。  
+   ・「最もスコア高い案: ○○○」を明示し、選定理由を論理的に説明すること。  
+   ・PDF化時は最終案のみ強調表示すること。
+
+7. 実行計画  
+   ・最も優先すべき案について、以下を5W1Hで具体化して記載すること。  
+     Who: 担当者  
+     What: 施策内容  
+     When: 期限（具体的な日付は禁止、例：「半年以内」「今期中」など曖昧表現）  
+     Where: 実行場所や部署  
+     Why: なぜこの案が最適なのか論理的に説明  
+     How: 実行プロセス  
+     How much: 投資額やリソース  
+   ・リスク要因と対策案を具体的に記載し、明確化すること。
+
+8. 次回モニタリング・PDCA設計  
+   ・実行計画のKPIと整合性をとり、具体的なKPI指標を設定すること。  
+   ・チェック頻度(例：月次、週次)、担当者、指標(数値)を明確に記載すること。  
+   ・改善アクションを明示し、PDCAのフローを具体的に設計すること。
+
+9. 参考データ・URL  
+   ・外部環境分析などで使用した出典・参考URLをMarkdownリンク形式で最低5件以上、推奨10件以上記載すること。  
+   ・URLだけでなくタイトルも明記し、情報の信頼性を担保すること。
 
 【必須条件】
-・「年月・年月日」などの具体的な日付表現は禁止（年次・時期など曖昧な表現にすること。未来のAIモデル整合性維持のため）
-・数字、現場エピソード、根拠を重視すること
-・施策や分析は抽象論を禁止し、ユーザー入力・外部データのみを活用すること
-・未入力の数値・比率は「不明」「未入力」等で事実ベースで記載すること
-・VRIO分析は必ず数値（1～5点）で統一し、評価基準も明示すること
-・最終案は「なぜこれが最適か？」「なぜ他案は劣るのか？」まで必ず論理的に説明すること
-・レポート全体で現場納得感・実行可能性を重視し、現場でそのまま使える内容とすること
+
+・「202X年」「20XX年」「〇年〇月」「〇月」などの具体的な年月表現は禁止。年次・時期など、曖昧な表現に置き換えること。  
+・数字、現場エピソード、論理根拠を重視し、抽象論・一般論は使用しない。  
+・AIがユーザー情報を勝手に補完することを禁止し、ユーザー未入力項目は必ず「未入力」「不明」と明記する。  
+・構成順は必ず順守し、章番号と見出しを必ず含めること。途中でレポート出力を中断しない。  
+・全体として約2000〜3000字程度の「A4 2〜3枚相当」の現場納品品質を目指す。  
+・絶対に全9章（1.～9.）の構成順で、すべての章を出力すること。  
+・途中で停止しないこと。  
+・章が未記載／飛ばし／省略にならないよう注意すること。  
+・出力が長くなる場合は「章ごとに区切って段階的に出力」してもよい。  
+---
 
 【法人／個人区分】:
 {entity_type}
 
 【地域】:
-{user_input.get("地域", "不明")}
+{user_input.get("地域", "未入力")}
 
 【業種】:
-{user_input.get("業種", "不明")}
+{user_input.get("業種", "未入力")}
 
 【主力商品・サービス】:
-{user_input.get("主力商品・サービス", "不明")}
+{user_input.get("主力商品・サービス", "未入力")}
 
 【財務指標】:
 - 年間売上高: {fin['sales']:,} 円
 - {profit_label}: {fin['profit']:,} 円
 - 営業CF (簡易): {fin['op_cf']:,} 円
-- {profit_label}率: {fin['profit_margin']:.1f}%
-- キャッシュ残高/月商: {fin['cash_months']:.1f} ヶ月分
+- {profit_label}率: {profit_margin_str}
+- キャッシュ残高/月商: {cash_months_str}
 - 借入金合計: {fin['loan']:,} 円
 - 年間返済額: {fin['repay']:,} 円
-- 返済負担感: {fin['burden_ratio']:.1f}%
+- 返済負担感: {burden_ratio_str}
 
 【ユーザー情報】:
 {user_input}
@@ -1409,14 +1508,12 @@ def generate_report(font_path: str) -> None:
 {ai_question}
 {user_answer}
 
-【外部環境（PEST・競合・Web情報）】:
-{external_env_text}
+【外部環境（PEST・市場ニーズ・競合・Web情報）】:
+{display_env}
 """
-
             # 1回目のレポート生成
             try:
                 main_prompt = make_prompt()
-                # ログにプロンプト
                 st.session_state.log.append({
                     "stage": "report_generation_prompt",
                     "prompt": main_prompt
@@ -1428,7 +1525,6 @@ def generate_report(font_path: str) -> None:
                     temperature=0.01,
                 )
                 first_report = resp1.choices[0].message.content
-                # ログにAIレスポンス
                 st.session_state.log.append({
                     "stage": "report_generation_response_initial",
                     "response": first_report
@@ -1437,36 +1533,72 @@ def generate_report(font_path: str) -> None:
 
                 # ダブルチェック＆修正プロンプト
                 double_prompt = f"""
-あなたはプロの経営コンサルタントです。
-以下のレポート初稿を厳しくダブルチェックし、不足箇所・根拠不足・抽象論・未入力数値のAI推測はすべて排除し加筆修正してください。
+あなたは超一流の戦略系経営コンサルタントです。
+以下のレポート初稿を、現場納品レベルに引き上げるため、厳格なダブルチェック＋改善提案を行ってください。
+全体の構成順(1〜9章)が正しいことを必ず確認し、抜け漏れがないかチェックしながら修正してください。
+ユーザー未入力項目には「未入力」「不明」と明記されているか厳密に確認してください。
+AI補完や推測は禁止です。
 
-【特に重点的にチェックする事項】
-・内部環境分析、真因分析は厳密にユーザー入力内容・現場ヒアリング内容に基づき、AIの推測・補完は禁止
-・VRIO分析は必ず「数値（1～5点）」で統一されているか確認すること
-・VRIO表に「高・中・低」表現が残っていた場合は必ず数値（1～5点）に修正すること
-・VRIO表下に評価基準（例：5点＝極めて高い競争優位）を必ず記載すること
-・「最もスコア高い案: ○○○」が必ず明示されているか確認すること
-・実行計画は「なぜこの案が最適なのか？」「なぜ他案は劣るのか？」の論理的説明が十分であること
-・構成順（1～9章）が正しく揃っているか確認すること
-・各章に抜け漏れがないこと
-・出典・参考URLが記載されていること
+【特に重点的にチェック・改善する事項】
+
+1. 外部環境分析（PEST／5フォース／市場ニーズ／競合分析）
+・ 市場規模／成長率／法改正／政策動向／主要競合動向／先行事例を必ず明記すること
+・ 各章に事例／データ／数値／出典URL（Markdownリンク）を含め、具体性を高めること
+・ 抽象論・一般論が混じっていないか確認すること
+
+2. 内部環境分析／真因分析
+・ ユーザー入力内容・現場ヒアリング内容が100%反映されているか確認すること
+・ AIの補完・推測は禁止
+・ 未入力項目には「未入力」と明記されているか確認すること
+
+3. 経営サマリー
+・ 財務数値、現状課題、内部情報に矛盾・抜けがないか確認すること
+・ ユーザー未入力項目は「未入力」「不明」と明記されているか確認すること
+
+4. 戦略アイディア（4案）
+・ 各案の「実効性／投資額／期待効果／回収月数」を明確に記載しているか確認すること
+・ 他案との差別性・選定理由（なぜこの案が最適か、他案はなぜ劣るか）を必ず記載すること
+
+5. VRIO分析
+・ Markdown表形式で数値(1〜5点)を出力しているか確認すること
+・ 「高・中・低」による表現は禁止 → 数値のみで表記されているか確認すること
+・ 評価基準（例：5点＝極めて高い競争優位、1点＝競争優位ほぼなし）を必ず表の下に記載しているか確認すること
+・ 「最もスコア高い案: ○○○」が明示されているか確認すること
+
+6. 実行計画
+・ KPI・担当・期限・リスク・最初の一歩が5W1Hで具体化されているか確認すること
+・ 「なぜこの案が最適なのか？」「なぜ他案は劣るのか？」の説明が十分か確認すること
+
+7. 次回モニタリング・PDCA設計
+・ KPIが実行計画と整合しているか確認すること（例：売上向上施策なら売上KPI）
+・ チェック頻度・担当者・指標が具体的に記載されているか確認すること
+・ PDCAのフローが具体的に設計されているか確認すること
+
+8. 参考データ・URL
+・ 最低5件以上（タイトル＋URL）をMarkdownリンク形式で記載しているか確認すること
+・ 出典の信頼性が高いか確認すること
+
+9. 構成順と抜け漏れ
+・ 1〜9章がすべて出力されているか確認すること
+・ 各章の見出し番号が正しい順番か確認すること
+・ 未入力項目が「未入力」「不明」と明記されているか確認すること
+・構成順が崩れていないかを章ごとに厳密に確認すること（1～9章）。
+・「章番号が飛んでいないか」「章タイトルがすべて存在するか」を明確に確認し、欠けている場合は必ず補完すること。
 
 【禁止事項】
-・レポート内に「202X年」「20XX年」「〇年〇月」「〇月」などの **具体的な年月表現は禁止**  
-  → 含まれていた場合は「今後数か月以内」「半年以内」「今期中」「今後」などの表現に修正すること  
-・AIが古い年や未来の矛盾した年を勝手に補完しないこと
+・「202X年」「20XX年」「〇年〇月」「〇月」などの具体的日付表現は禁止。
+・AIがユーザー未入力項目を推測・補完することは禁止。
+・構成順が崩れていないか必ず確認し、最後までレポート形式で出力を継続すること。
 
 【全体方針】
-・構成順・数字／現場エピソード／論理根拠／合意形成を重視すること
-・施策や分析は抽象論禁止。ユーザー入力・外部データに基づいて事実ベースで記載すること
-・未入力項目は「不明」「未入力」等の表記とすること（AI補完禁止）
-・現場で納得感が高く、そのまま実行に使える品質まで整えて仕上げること
-
+・抜け漏れゼロ、薄さゼロ、具体性高めの「現場納品品質」を徹底すること。
+・数値、現場エピソード、論理根拠を重視し、抽象論を禁止すること。
+・ユーザー入力と外部データを最大限活用し、事実ベースで記載すること。
+・「現場納得感」「実行可能性」「具体性」を最優先すること。
 
 【レポート初稿】
 {first_report}
 """
-                # ログにダブルチェックプロンプト
                 st.session_state.log.append({
                     "stage": "double_check_prompt",
                     "prompt": double_prompt
@@ -1478,57 +1610,59 @@ def generate_report(font_path: str) -> None:
                     temperature=0.01,
                 )
                 final_report = resp2.choices[0].message.content
-                # ログにダブルチェックAIレスポンス
                 st.session_state.log.append({
                     "stage": "double_check_response",
                     "response": final_report
                 })
                 progress.progress(80)
 
-                # セクション分割とVRIO部分フィルタリング
+                # 不要な末尾メッセージを自動的に取り除く
+                final_report = final_report.replace(
+                    "以上の修正により、レポートは現場での実行に耐えうる品質となっています。", ""
+                ).strip()
+
+                # セクション分割＆番号振り直し（GPTミス対策）
                 section_titles = [
-                    ("外部環境分析", r"1[\.．] ?外部環境分析"),
-                    ("内部環境分析", r"2[\.．] ?内部環境分析"),
-                    ("経営サマリー", r"3[\.．] ?経営サマリー"),
-                    ("真因分析", r"4[\.．] ?真因分析"),
-                    ("戦略アイディア", r"5[\.．] ?戦略アイディア"),
-                    ("VRIO分析", r"6[\.．] ?VRIO分析"),
-                    ("実行計画", r"7[\.．] ?実行計画"),
-                    ("次回モニタリング・PDCA設計", r"8[\.．] ?次回モニタリング・PDCA設計"),
-                    ("参考データ・URL", r"9[\.．] ?参考データ・URL"),
+                    ("外部環境分析", r"\d+[\.．]\s*外部環境分析"),
+                    ("内部環境分析", r"\d+[\.．]\s*内部環境分析"),
+                    ("経営サマリー", r"\d+[\.．]\s*経営サマリー"),
+                    ("真因分析", r"\d+[\.．]\s*真因分析"),
+                    ("戦略アイディア", r"\d+[\.．]\s*戦略アイディア"),
+                    ("VRIO分析", r"\d+[\.．]\s*VRIO分析"),
+                    ("実行計画", r"\d+[\.．]\s*実行計画"),
+                    ("次回モニタリング・PDCA設計", r"\d+[\.．]\s*次回モニタリング・PDCA設計"),
+                    ("参考データ・URL", r"\d+[\.．]\s*参考データ・URL"),
                 ]
                 text_sections = []
-                for i, (title, pattern) in enumerate(section_titles):
-                    match = re.search(pattern, final_report)
-                    if match:
-                        start = match.end()
-                        if i + 1 < len(section_titles):
-                            next_pattern = section_titles[i + 1][1]
-                            end_match = re.search(next_pattern, final_report[start:])
-                            end_idx = start + end_match.start() if end_match else len(final_report)
+                # 改行前に番号をリセットして1〜9を強制付番
+                normalized_report = final_report
+                for idx, (title, pattern) in enumerate(section_titles, start=1):
+                    normalized_report = re.sub(
+                        pattern,
+                        f"{idx}. {title}",
+                        normalized_report,
+                        flags=re.MULTILINE
+                    )
+                # セクションごとに切り出し
+                for i, (title, _) in enumerate(section_titles):
+                    pattern_i = rf"{i+1}\.\s*{title}"
+                    match_i = re.search(pattern_i, normalized_report)
+                    if match_i:
+                        start = match_i.end()
+                        if i+1 < len(section_titles):
+                            pattern_next = rf"{i+2}\.\s*{section_titles[i+1][0]}"
+                            match_next = re.search(pattern_next, normalized_report[start:])
+                            end = start + match_next.start() if match_next else len(normalized_report)
                         else:
-                            end_idx = len(final_report)
-                        section_text = final_report[start:end_idx].strip()
-
-                        # VRIO分析セクションだけ「最もスコア高い案」抽出
-                        if title == "VRIO分析":
-                            lines = section_text.splitlines()
-                            highest_line = None
-                            for ln in lines:
-                                if "最もスコア高い案" in ln or "最もスコアが高い案" in ln:
-                                    highest_line = ln.strip()
-                                    break
-                            if highest_line:
-                                section_text = f"**VRIO分析（最終案）**\n\n- {highest_line}\n\n\n"
-                            else:
-                                section_text = "**VRIO分析（最終案のみ表示）**\n\n"
+                            end = len(normalized_report)
+                        section_text = normalized_report[start:end].strip()
                         text_sections.append({
                             "title": title,
-                            "text": section_text,
+                            "text": section_text
                         })
 
                 # セッションに保存
-                st.session_state["final_report"]  = final_report
+                st.session_state["final_report"]  = normalized_report
                 st.session_state["text_sections"] = text_sections
                 st.session_state["keep_report"]   = True
                 progress.progress(100)
@@ -1537,16 +1671,20 @@ def generate_report(font_path: str) -> None:
                 st.error(f"AIエラー内容: {e}")
                 st.stop()
 
-        # --- レポート本文を表示 ---
-        st.markdown(st.session_state["final_report"].replace("\n", "  \n"))
-        st.markdown("---\n#### 入力内容の再編集・再生成")
-        if st.button("入力内容を再編集して診断をやり直す"):
-            # 再編集時は step=1 に戻す
+        # --- レポート本文を表示（Markdownを強調調整） ---
+        st.markdown(st.session_state["final_report"], unsafe_allow_html=False)
+
+        # 再生成オプション
+        st.markdown("---")
+        st.markdown("#### 入力内容の再編集・再生成")
+        st.markdown('<div class="button-bar">', unsafe_allow_html=True)
+        if st.button("入力内容を再編集して再生成", key="btn_restart_generation"):
             st.session_state.step        = 1
             st.session_state.keep_report = False
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        # --- PDF生成・ダウンロード用バッファ保持 ---
+        # --- PDF生成・ダウンロード ---
         if st.session_state.get("pdf_buffer") is None:
             buffer = create_pdf(st.session_state["text_sections"], filename="AI_Dock_Report.pdf")
             st.session_state["pdf_buffer"] = buffer
@@ -1559,7 +1697,8 @@ def generate_report(font_path: str) -> None:
         )
 
         # --- 入力データのエクスポート（CSV/Excel） ---
-        st.markdown("---\n#### 入力データのエクスポート")
+        st.markdown("---")
+        st.markdown("#### 入力データのエクスポート")
         col1, col2 = st.columns(2)
         with col1:
             csv_data = export_to_csv()
@@ -1583,21 +1722,33 @@ def generate_report(font_path: str) -> None:
                 st.caption("（Excel出力には xlsxwriter パッケージが必要です）")
 
         # --- アンケートリンク表示 ---
-        st.markdown("---\n### 📣 アンケートのお願い")
+        st.markdown("---")
+        st.markdown("### 📣 アンケートのお願い")
         st.markdown("""
 大変お手数ですが、本アプリの改善のためにご協力ください。  
- [ご利用後アンケート（Googleフォーム）はこちら](https://docs.google.com/forms/d/e/1FAIpQLSeOwzqGwktHwJNgh9vBCUT8cGfFEHuAd8zwQ04k1uxDNgcKQA/viewform?usp=sf_link)  
+[ご利用後アンケート（Googleフォーム）はこちら](https://docs.google.com/forms/d/e/1FAIpQLSeOwzqGwktHwJNgh9vBCUT8cGfFEHuAd8zwQ04k1uxDNgcKQA/viewform?usp=sf_link)  
 """, unsafe_allow_html=True)
 
-    # --- 戻るボタンは Tabs の後ろに置く ---
-    st.markdown('<div class="center-button">', unsafe_allow_html=True)
-    back_col1, back_col2, back_col3 = st.columns([1, 1, 1])
-    with back_col2:
-        if st.button("← 戻る"):
-            st.session_state.step = 2
-            st.rerun()
+    st.markdown('<div class="button-bar">', unsafe_allow_html=True)
+    if st.button("← 戻る", key="btn_back_to_step2"):
+        st.session_state.step = 2
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
+# --- 活用イメージ表示（ChatGPT/Notion風シンプルカード） ---
+def render_usage_scenarios() -> None:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown("### ✨ このAI診断の活用イメージ")
+    st.markdown("""
+✅ **忙しい中でも今の経営状況や課題をスッキリ整理して、頭をクリアにしたい**  
+✅ **売上が伸び悩み、次の一手や新たな打ち手を見つけたい**  
+✅ **資金繰りや借入返済に先行きの不安があり、早めに対策を練りたい**  
+✅ **社員や家族と「これからどうするか」を共有し、方向性を揃えたい**  
+✅ **頭の中の考えや現場の声をまとめて「見える化」したい**  
+✅ **金融機関との面談や融資交渉で、説得力ある経営方針を示したい**  
+✅ **補助金申請に向けて、納得感のある事業計画のたたき台を作りたい**  
+    """)
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- 2️⃣0️⃣ メイン実行部 ---
@@ -1607,32 +1758,73 @@ def main() -> None:
 
     # セッションのstep初期化
     if "step" not in st.session_state:
-        st.session_state.step = 1
+        # ステップ0（規約同意）から始める
+        st.session_state.step = 0
 
-    # --- ポリシー同意チェック ---
-    consent = show_policy_and_consent()
-    if not consent:
-        st.warning("ご利用には同意が必要です。")
-        return
-
-    # --- 活用イメージ表示 ---
-    render_usage_scenarios()
+    # --- デバッグ用セッション初期化 ---
+    if debug:
+        if "user_input" not in st.session_state:
+            st.session_state.user_input = {
+                "法人／個人区分": "法人",
+                "会社名": "大阪食品工業株式会社",
+                "地域": "大阪府東大阪市",
+                "業種": "製造業（食品）",
+                "業種（リスト外）": "",
+                "主力商品・サービス": "業務用冷凍総菜・冷凍パン",
+                "主な関心テーマ": "業界動向・省人化投資",
+                "年間売上高": "45000000",
+                "売上高の増減": "変わらない",
+                "営業利益／所得金額": "3000000",
+                "営業利益の増減／所得金額の増減": "減少",
+                "現金・預金残高": "8000000",
+                "借入金合計": "10000000",
+                "毎月返済額": "250000",
+                "従業員数": "18",
+                "主な顧客層": "外食チェーン・給食事業者",
+                "主要顧客数の増減": "減少",
+                "主な販売チャネル": "法人営業・卸",
+                "競合の多さ": "多い",
+                "経営課題選択": "人材確保",
+                "経営課題自由記述": "製造現場の人手不足と技能継承の課題あり。採用難が続いている。",
+                "自社の強み": "品質管理の徹底／小ロット対応／OEM実績",
+                "資金繰りの状態": "やや不安",
+                "現場ヒアリング所見": [
+                    "中堅スタッフの退職が続き現場に負担がかかっている",
+                    "自動包装機導入により一部工程は改善したが、梱包・出荷工程は依然として手作業中心"
+                    "原材料費高騰により利益率が低下"
+                ],
+                "外部環境肌感": "最低賃金上昇、人手不足が深刻化、取引先からの価格交渉が厳しい",
+                "プラン": "Lite（AI経営診断GPT・無料）",
+                "法務税務フラグ": False,
+            }
+            st.session_state.ai_question = "製造現場の技能継承に関して、現在どのような取り組みや課題がありますか？現場からの声も教えてください。"
+            st.session_state.user_answer = "現在は現場リーダーがOJTで新人教育を行っていますが、マニュアル整備が遅れており、属人化が進んでいます。リーダー層からは『教育の時間が取れない』という声が出ています。"
+            if "log" not in st.session_state:
+                st.session_state.log = []
+            st.session_state.step = 3  # デバッグで直接レポート生成へ
 
     # --- プラン選択 ---
-    plan = select_plan()
+    if debug:
+        # デバッグ時はセッションの user_input からプラン取得（固定：Lite）
+        plan = st.session_state.user_input.get("プラン", "Lite（AI経営診断GPT・無料）")
+        st.sidebar.success(f"✅ デバッグモード中 - 使用プラン: {plan}")
+    else:
+        # 通常時は活用イメージ → サイドバーでプラン選択
+        render_usage_scenarios()
+        plan = select_plan()
+        if plan.startswith("Starter"):
+            st.info("「Starter（右腕・API連携）」プランは現在準備中です。しばらくお待ちください。")
+            return
+        if plan.startswith("Pro"):
+            st.info("「Pro（参謀・戦略実行支援）」プランは現在準備中です。しばらくお待ちください。")
+            return
 
-    # Starter/Proは準備中案内
-    if plan.startswith("Starter"):
-        st.info("「Starter（右腕・API連携）」プランは現在準備中です。しばらくお待ちください。")
+    # --- ステップごとの画面遷移 ---
+    step = st.session_state.get("step", 0)
+    if step == 0:
+        show_policy_step()
         return
-    if plan.startswith("Pro"):
-        st.info("「Pro（参謀・戦略実行支援）」プランは現在準備中です。しばらくお待ちください。")
-        return
-
-    # --- 現在のステップに応じて画面を切り替え ---
-    step = st.session_state.get("step", 1)
-
-    if step == 1:
+    elif step == 1:
         input_form(plan)
     elif step == 2:
         ai_deep_question()
@@ -1640,23 +1832,6 @@ def main() -> None:
         generate_report(font_path)
     else:
         st.error("AIレポートの生成に失敗しました。入力内容やプロンプトを見直し、再度お試しください。")
-
-
-# --- 活用イメージ表示（ChatGPT/Notion風シンプルカード） ---
-def render_usage_scenarios() -> None:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.markdown("### ✨ このAI診断の活用イメージ")
-    st.markdown("""
-- 📌 **忙しい中でも経営の現状と課題を整理したい**
-- 📌 **売上が停滞していて打ち手を考えたい**
-- 📌 **資金繰りが厳しくなり対策を整理したい**
-- 📌 **社員や家族との意識合わせに活用したい**
-- 📌 **自分の考えを見える化したい**
-- 📌 **金融機関との面談に備えて課題や今後の方針を整理したい**
-- 📌 **補助金用事業計画書の構成をまとめたい**
-    """)
-    st.markdown('</div>', unsafe_allow_html=True)
-
 
 # --- 2️⃣1️⃣ エントリーポイント ---
 if __name__ == "__main__":
